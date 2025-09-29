@@ -1,0 +1,36 @@
+{
+  "name": "Salesforce SOQL & REST",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^38.1.2",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "build": {
+    "appId": "...",
+    "productName": "Salesforce SOQL & REST",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "mac": null,
+    "linux": null,
+    "files": [
+      "**/*"
+    ],
+    "asar": true
+  }
+}
