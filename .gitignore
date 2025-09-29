@@ -36,4 +36,4 @@ Thumbs.db
 *.log
 
 # Config files
-config/*.json
+configs/*.json
