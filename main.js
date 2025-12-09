@@ -19,7 +19,7 @@ function createWindow() {
     });
 
     // Open DevTools automatically
-    win.webContents.openDevTools();
+   // win.webContents.openDevTools();
 
 
     // Remove default menu (File, Edit, Window, Help)
