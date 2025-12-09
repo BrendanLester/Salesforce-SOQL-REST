@@ -9,9 +9,9 @@ body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:
 #toolbar button { padding:6px 12px; background:#0066cc; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
 #toolbar button:hover { background:#0052a3; }
 #toolbar input[type="file"] { display:none; }
-#top, #bottom { flex:1; overflow:auto; }
+#top, #bottom { flex:1; overflow:hidden; }
 #splitter { height:5px; background:#888; cursor:row-resize; }
-textarea { width:100%; height:100%; resize:none; font-family:monospace; font-size:14px; box-sizing:border-box; padding:8px; }
+textarea { width:100%; height:100%; resize:none; font-family:monospace; font-size:14px; box-sizing:border-box; padding:8px; overflow:auto; }
 textarea::selection { background:#ffd700; color:#000; }
 #log { padding:8px; font-family:monospace; font-size:14px; overflow:auto; flex:1; outline:none; }
 #log:focus { box-shadow: inset 0 0 0 2px #0066cc; }
@@ -214,6 +214,8 @@ editor.addEventListener("keydown",async e=>{
         editor.focus();
 
         log.innerHTML='';
+        document.body.style.cursor = 'wait';
+        editor.style.cursor = 'wait';
         try{
             const soqlKeywords=/^(SELECT|UPDATE|DELETE|INSERT|UPSERT|MERGE)\b/i;
             if(soqlKeywords.test(targetBlock)){
@@ -243,6 +245,8 @@ editor.addEventListener("keydown",async e=>{
             errEl.innerHTML=`❌ ${err.message.replace(/\n/g,'<br>')}`;
             log.appendChild(errEl);
         }
+        document.body.style.cursor = 'default';
+        editor.style.cursor = 'text';
         log.scrollTop = 0;
     }
 });
