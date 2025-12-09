@@ -12,7 +12,9 @@ body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:
 #top, #bottom { flex:1; overflow:auto; }
 #splitter { height:5px; background:#888; cursor:row-resize; }
 textarea { width:100%; height:100%; resize:none; font-family:monospace; font-size:14px; box-sizing:border-box; padding:8px; }
-#log { padding:8px; font-family:monospace; font-size:14px; overflow:auto; flex:1; }
+textarea::selection { background:#ffd700; color:#000; }
+#log { padding:8px; font-family:monospace; font-size:14px; overflow:auto; flex:1; outline:none; }
+#log:focus { box-shadow: inset 0 0 0 2px #0066cc; }
 .log-line { padding:2px 0; border-bottom:1px solid #ccc; }
 table { width:100%; border-collapse:collapse; margin-top:4px; font-family:monospace; font-size:14px; }
 th, td { border:1px solid #ccc; padding:4px 8px; text-align:left; }
@@ -46,7 +48,7 @@ tr:hover { background:#fffae6; }
     <div id="results-header">
         <button id="copyResultsBtn">📋 Copy Results</button>
     </div>
-    <div id="log">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
+    <div id="log" tabindex="0">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
 </div>
 
 <script>
@@ -144,8 +146,20 @@ const log = document.getElementById("log");
 // Copy button
 document.getElementById('copyResultsBtn').addEventListener('click',()=>{ if(!log.innerText) return; navigator.clipboard.writeText(log.innerText).catch(err=>alert('❌ Failed to copy results')); });
 
-// Ctrl+A in log
-log.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key==='a'){ e.preventDefault(); const r=document.createRange(); r.selectNodeContents(log); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); } });
+// Ctrl+A in log - select all results content
+log.addEventListener('keydown',e=>{ 
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'){ 
+        e.preventDefault(); 
+        const r=document.createRange(); 
+        r.selectNodeContents(log); 
+        const s=window.getSelection(); 
+        s.removeAllRanges(); 
+        s.addRange(r); 
+    } 
+});
+
+// Auto-focus log when clicked
+log.addEventListener('click', () => log.focus());
 
 // Ctrl+E handler supporting multi-line SOQL separated by blank lines
 editor.addEventListener("keydown",async e=>{
@@ -155,28 +169,67 @@ editor.addEventListener("keydown",async e=>{
         const text = editor.value;
         const cursorPos = editor.selectionStart;
 
-        // Split editor content into blocks separated by blank lines
-        const blocks = text.split(/\n\s*\n/); // blank line separator
-        let targetBlock = null;
-        let charCount = 0;
-        for(let block of blocks){
-            if(cursorPos <= charCount + block.length + 1){ targetBlock = block.trim(); break; }
-            charCount += block.length + 2; // account for \n\n separator
+        // Find the block containing the cursor
+        const lines = text.split('\n');
+        let charPos = 0;
+        let blockStart = -1;
+        let blockEnd = -1;
+        let blockLines = [];
+        let inBlock = false;
+        
+        for(let i = 0; i < lines.length; i++){
+            const line = lines[i];
+            const lineStart = charPos;
+            const lineEnd = charPos + line.length;
+            
+            if(line.trim() === ''){
+                if(inBlock){
+                    blockEnd = charPos - 1; // End before the empty line
+                    if(cursorPos >= blockStart && cursorPos <= blockEnd) break;
+                    blockStart = -1;
+                    blockLines = [];
+                    inBlock = false;
+                }
+            } else {
+                if(!inBlock){
+                    blockStart = lineStart;
+                    inBlock = true;
+                }
+                blockLines.push(line);
+                blockEnd = lineEnd;
+            }
+            charPos += line.length + 1; // +1 for newline
         }
+        
+        // Check if cursor is in the found block
+        if(blockStart === -1 || cursorPos < blockStart || cursorPos > blockEnd){
+            return;
+        }
+        
+        const targetBlock = blockLines.map(l => l.trim()).join('\n').trim();
         if(!targetBlock) return;
+
+        // Highlight the block being executed
+        editor.setSelectionRange(blockStart, blockEnd);
+        editor.focus();
 
         log.innerHTML='';
         try{
             const soqlKeywords=/^(SELECT|UPDATE|DELETE|INSERT|UPSERT|MERGE)\b/i;
             if(soqlKeywords.test(targetBlock)){
-                const result = await window.api.executeSOQL(targetBlock);
+                // Remove // and -- comments from SOQL
+                const cleanedBlock = targetBlock.split('\n').map(l=>l.replace(/(\/\/|--).*/,'').trim()).join('\n').trim();
+                const result = await window.api.executeSOQL(cleanedBlock);
                 renderResult(result);
             } else {
                 // Treat each non-empty line as a REST path
                 const lines = targetBlock.split("\n").map(l=>l.trim()).filter(l=>l);
                 for(const path of lines){
                     try{
-                        const res = await window.api.executeREST(path);
+                        // Remove // and -- comments from REST paths
+                        const cleanedPath = path.replace(/(\/\/|--).*/,'').trim();
+                        if(!cleanedPath) continue;
+                        const res = await window.api.executeREST(cleanedPath);
                         renderResult(res);
                     } catch(err){
                         const errEl=document.createElement("div"); errEl.className="log-line";
@@ -190,7 +243,7 @@ editor.addEventListener("keydown",async e=>{
             errEl.innerHTML=`❌ ${err.message.replace(/\n/g,'<br>')}`;
             log.appendChild(errEl);
         }
-        log.scrollTop = log.scrollHeight;
+        log.scrollTop = 0;
     }
 });
 
