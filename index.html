@@ -25,6 +25,13 @@ tr:hover { background:#fffae6; }
 
 #results-header { display:flex; justify-content:flex-end; padding:4px 8px; border-bottom:1px solid #ccc; background:#f5f5f5; }
 #copyResultsBtn { padding:4px 8px; font-size:12px; cursor:pointer; }
+
+.search-box { position:absolute; top:10px; right:10px; background:#fff; border:2px solid #0066cc; border-radius:4px; padding:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:1000; display:none; }
+.search-box input { border:1px solid #ccc; padding:4px; margin-right:4px; font-size:12px; }
+.search-box button { background:#0066cc; color:white; border:none; padding:4px 8px; cursor:pointer; font-size:12px; }
+.search-box button:hover { background:#0052a3; }
+.search-highlight { background:#ffff00; color:#000; }
+.search-current { background:#ff6600; color:#fff; }
 </style>
 </head>
 <body>
@@ -40,15 +47,30 @@ tr:hover { background:#fffae6; }
     <span style="margin-left:auto; font-size:12px; color:#666;">Press Ctrl+E on a query block to execute SOQL or REST</span>
 </div>
 
-<div id="top" style="background:#f0f0f0;">
+<div id="top" style="background:#f0f0f0; position:relative;">
 <textarea id="editor" placeholder="Type SOQL queries or REST paths here..."></textarea>
+<div id="editorSearch" class="search-box">
+    <input type="text" placeholder="Search..." id="editorSearchInput">
+    <span id="editorMatchCount" style="font-size:11px; color:#666; margin-right:4px;"></span>
+    <button onclick="findNext('editor')" title="Find Next (Enter)">↓</button>
+    <button onclick="findPrev('editor')" title="Find Previous (Shift+Enter)">↑</button>
+    <button onclick="closeSearch('editor')" title="Close (Escape)">✕</button>
+</div>
 </div>
 <div id="splitter"></div>
-<div id="bottom" style="background:#fff; display:flex; flex-direction:column;">
+<div id="bottom" style="background:#fff; display:flex; flex-direction:column; position:relative;">
     <div id="results-header">
+        <span id="resultsCount" style="font-size:12px; color:#666; margin-right:auto;"></span>
         <button id="copyResultsBtn">📋 Copy Results</button>
     </div>
     <div id="log" tabindex="0">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
+    <div id="logSearch" class="search-box">
+        <input type="text" placeholder="Search..." id="logSearchInput">
+        <span id="logMatchCount" style="font-size:11px; color:#666; margin-right:4px;"></span>
+        <button onclick="findNext('log')" title="Find Next (Enter)">↓</button>
+        <button onclick="findPrev('log')" title="Find Previous (Shift+Enter)">↑</button>
+        <button onclick="closeSearch('log')" title="Close (Escape)">✕</button>
+    </div>
 </div>
 
 <script>
@@ -161,6 +183,317 @@ log.addEventListener('keydown',e=>{
 // Auto-focus log when clicked
 log.addEventListener('click', () => log.focus());
 
+// Global Escape handler to close search boxes
+document.addEventListener('keydown', e => {
+    if(e.key === 'Escape') {
+        const editorSearch = document.getElementById('editorSearch');
+        const logSearch = document.getElementById('logSearch');
+        
+        if(editorSearch.style.display === 'block') {
+            closeSearch('editor');
+        }
+        if(logSearch.style.display === 'block') {
+            closeSearch('log');
+        }
+    }
+});
+
+// Search functionality
+let currentMatches = {};
+let currentMatchIndex = {};
+
+function openSearch(pane) {
+    const searchBox = document.getElementById(pane === 'editor' ? 'editorSearch' : 'logSearch');
+    const input = document.getElementById(pane === 'editor' ? 'editorSearchInput' : 'logSearchInput');
+    searchBox.style.display = 'block';
+    input.focus();
+}
+
+function closeSearch(pane) {
+    const searchBox = document.getElementById(pane === 'editor' ? 'editorSearch' : 'logSearch');
+    searchBox.style.display = 'none';
+    clearHighlights(pane);
+}
+
+function clearHighlights(pane) {
+    if(pane === 'editor') {
+        // For textarea, we can't highlight directly, so we'll just clear selection
+        editor.setSelectionRange(0, 0);
+        document.getElementById('editorMatchCount').textContent = '';
+    } else {
+        // For log, remove highlight spans
+        const highlights = log.querySelectorAll('.search-highlight, .search-current');
+        highlights.forEach(span => {
+            const parent = span.parentNode;
+            parent.replaceChild(document.createTextNode(span.textContent), span);
+            parent.normalize();
+        });
+        document.getElementById('logMatchCount').textContent = '';
+    }
+    currentMatches[pane] = [];
+    currentMatchIndex[pane] = -1;
+}
+
+function findInEditor(searchText, direction = 1) {
+    if(!searchText) return;
+    
+    const text = editor.value.toLowerCase();
+    const searchLower = searchText.toLowerCase();
+    const matches = [];
+    let pos = 0;
+    
+    // Find all matches
+    while((pos = text.indexOf(searchLower, pos)) !== -1) {
+        matches.push(pos);
+        pos++;
+    }
+    
+    if(matches.length === 0) return;
+    
+    // Initialize or update current match index
+    if(!currentMatches['editor'] || currentMatches['editor'].searchText !== searchText) {
+        currentMatches['editor'] = { matches: matches, searchText: searchText };
+        currentMatchIndex['editor'] = 0;
+    } else {
+        const currentPos = editor.selectionStart;
+        let nearestIndex = 0;
+        
+        // Find current position in matches
+        for(let i = 0; i < matches.length; i++) {
+            if(matches[i] >= currentPos) {
+                nearestIndex = i;
+                break;
+            }
+        }
+        
+        if(direction > 0) {
+            currentMatchIndex['editor'] = (nearestIndex < matches.length - 1) ? nearestIndex + 1 : 0;
+        } else {
+            currentMatchIndex['editor'] = (nearestIndex > 0) ? nearestIndex - 1 : matches.length - 1;
+        }
+    }
+    
+    const matchPos = matches[currentMatchIndex['editor']];
+    editor.setSelectionRange(matchPos, matchPos + searchText.length);
+    editor.focus();
+    
+    // Update match counter
+    const counter = document.getElementById('editorMatchCount');
+    counter.textContent = `${currentMatchIndex['editor'] + 1} of ${matches.length}`;
+    
+    // Scroll to the selection in textarea - use a more reliable method
+    setTimeout(() => {
+        const textBeforeMatch = editor.value.substring(0, matchPos);
+        const lines = textBeforeMatch.split('\n');
+        const lineNumber = lines.length - 1;
+        const computedStyle = getComputedStyle(editor);
+        const lineHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.2 || 16;
+        const targetScrollTop = lineNumber * lineHeight - (editor.clientHeight / 2);
+        editor.scrollTop = Math.max(0, targetScrollTop);
+    }, 10);
+}
+
+function findInLog(searchText, direction = 1) {
+    if(!searchText) return;
+    
+    // Only rebuild matches if search text changed
+    if(!currentMatches['log'] || currentMatches['log'].searchText !== searchText) {
+        clearHighlights('log');
+        const text = log.textContent;
+        const regex = new RegExp(escapeRegex(searchText), 'gi');
+        let match;
+        const matches = [];
+        
+        while((match = regex.exec(text)) !== null) {
+            matches.push({start: match.index, end: match.index + match[0].length});
+        }
+        
+        if(matches.length === 0) return;
+        
+        currentMatches['log'] = { matches: matches, searchText: searchText };
+        currentMatchIndex['log'] = 0;
+    } else {
+        // Navigate through existing matches
+        const matches = currentMatches['log'].matches;
+        currentMatchIndex['log'] += direction;
+        if(currentMatchIndex['log'] >= matches.length) currentMatchIndex['log'] = 0;
+        if(currentMatchIndex['log'] < 0) currentMatchIndex['log'] = matches.length - 1;
+    }
+    
+    highlightLogMatches(searchText, currentMatchIndex['log']);
+    
+    // Update match counter
+    const counter = document.getElementById('logMatchCount');
+    const matches = currentMatches['log'].matches;
+    counter.textContent = `${currentMatchIndex['log'] + 1} of ${matches.length}`;
+}
+
+function highlightLogMatches(searchText, currentIndex) {
+    // Check if highlights already exist
+    const existingHighlights = log.querySelectorAll('.search-highlight, .search-current');
+    
+    if(existingHighlights.length === 0) {
+        // First time highlighting - walk through text nodes only
+        const regex = new RegExp(escapeRegex(searchText), 'gi');
+        let matchIndex = 0;
+        
+        function highlightTextNode(node) {
+            if(node.nodeType === Node.TEXT_NODE) {
+                const text = node.textContent;
+                const matches = [];
+                let match;
+                regex.lastIndex = 0;
+                while((match = regex.exec(text)) !== null) {
+                    matches.push({ start: match.index, end: match.index + match[0].length, text: match[0] });
+                }
+                
+                if(matches.length > 0) {
+                    const fragment = document.createDocumentFragment();
+                    let lastEnd = 0;
+                    
+                    matches.forEach(m => {
+                        if(m.start > lastEnd) {
+                            fragment.appendChild(document.createTextNode(text.substring(lastEnd, m.start)));
+                        }
+                        
+                        const span = document.createElement('span');
+                        span.className = matchIndex === currentIndex ? 'search-current' : 'search-highlight';
+                        if(matchIndex === currentIndex) {
+                            span.id = 'current-search-match';
+                        }
+                        span.textContent = m.text;
+                        fragment.appendChild(span);
+                        
+                        lastEnd = m.end;
+                        matchIndex++;
+                    });
+                    
+                    if(lastEnd < text.length) {
+                        fragment.appendChild(document.createTextNode(text.substring(lastEnd)));
+                    }
+                    
+                    node.parentNode.replaceChild(fragment, node);
+                }
+            } else if(node.nodeType === Node.ELEMENT_NODE) {
+                // Skip search highlight spans
+                if(!node.classList.contains('search-highlight') && !node.classList.contains('search-current')) {
+                    Array.from(node.childNodes).forEach(child => highlightTextNode(child));
+                }
+            }
+        }
+        
+        highlightTextNode(log);
+    } else {
+        // Update existing highlights - just change classes
+        existingHighlights.forEach((span, index) => {
+            span.className = index === currentIndex ? 'search-current' : 'search-highlight';
+            if(index === currentIndex) {
+                span.id = 'current-search-match';
+            } else {
+                span.removeAttribute('id');
+            }
+        });
+    }
+    
+    // Scroll to current match
+    setTimeout(() => {
+        const currentMatch = document.getElementById('current-search-match');
+        if(currentMatch) {
+            currentMatch.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        }
+    }, 10);
+}
+
+function escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findNext(pane) {
+    const input = document.getElementById(pane === 'editor' ? 'editorSearchInput' : 'logSearchInput');
+    const searchText = input.value.trim();
+    if(!searchText) return;
+    
+    if(pane === 'editor') {
+        findInEditor(searchText, 1);
+    } else {
+        findInLog(searchText, 1);
+    }
+}
+
+function findPrev(pane) {
+    const input = document.getElementById(pane === 'editor' ? 'editorSearchInput' : 'logSearchInput');
+    const searchText = input.value.trim();
+    if(!searchText) return;
+    
+    if(pane === 'editor') {
+        findInEditor(searchText, -1);
+    } else {
+        findInLog(searchText, -1);
+    }
+}
+
+// Ctrl+F handlers for both panes
+editor.addEventListener('keydown', e => {
+    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        openSearch('editor');
+    }
+});
+
+log.addEventListener('keydown', e => {
+    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        openSearch('log');
+    }
+});
+
+// Search input handlers
+document.getElementById('editorSearchInput').addEventListener('keydown', e => {
+    if(e.key === 'Enter') {
+        e.preventDefault();
+        if(e.shiftKey) {
+            findPrev('editor');
+        } else {
+            findNext('editor');
+        }
+    } else if(e.key === 'Escape') {
+        closeSearch('editor');
+    }
+});
+
+document.getElementById('editorSearchInput').addEventListener('input', e => {
+    const searchText = e.target.value.trim();
+    if(searchText) {
+        currentMatches['editor'] = null; // Reset to trigger new search
+        findInEditor(searchText, 1);
+    } else {
+        clearHighlights('editor');
+    }
+});
+
+document.getElementById('logSearchInput').addEventListener('keydown', e => {
+    if(e.key === 'Enter') {
+        e.preventDefault();
+        if(e.shiftKey) {
+            findPrev('log');
+        } else {
+            findNext('log');
+        }
+    } else if(e.key === 'Escape') {
+        closeSearch('log');
+    }
+});
+
+document.getElementById('logSearchInput').addEventListener('input', e => {
+    const searchText = e.target.value.trim();
+    if(searchText) {
+        currentMatches['log'] = null; // Reset to trigger new search
+        findInLog(searchText, 1);
+    } else {
+        clearHighlights('log');
+    }
+});
+
 // Ctrl+E handler supporting multi-line SOQL separated by blank lines
 editor.addEventListener("keydown",async e=>{
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='e'){
@@ -214,6 +547,7 @@ editor.addEventListener("keydown",async e=>{
         editor.focus();
 
         log.innerHTML='';
+        document.getElementById('resultsCount').textContent = '';
         document.body.style.cursor = 'wait';
         editor.style.cursor = 'wait';
         try{
@@ -262,13 +596,16 @@ function renderResult(result) {
         const tbody = document.createElement("tbody");
         const tr = document.createElement("tr"); const td = document.createElement("td");
         td.textContent = result.totalSize; tr.appendChild(td); tbody.appendChild(tr); tableEl.appendChild(tbody);
-        log.appendChild(tableEl); return;
+        log.appendChild(tableEl);
+        document.getElementById('resultsCount').textContent = `Results: ${result.totalSize}`;
+        return;
     }
 
     if (!result.records && !Array.isArray(result)) {
         const pre = document.createElement("pre");
         pre.textContent = JSON.stringify(result, null, 2);
         log.appendChild(pre);
+        document.getElementById('resultsCount').textContent = 'Results: JSON Response';
         return;
     }
 
@@ -278,6 +615,7 @@ function renderResult(result) {
         emptyEl.className = "log-line";
         emptyEl.textContent = "⚠️ No records returned.";
         log.appendChild(emptyEl);
+        document.getElementById('resultsCount').textContent = 'Results: 0';
         return;
     }
 
@@ -294,12 +632,28 @@ function renderResult(result) {
     const tableEl = document.createElement("table");
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
+    
+    // Add row number column header
+    const rowNumTh = document.createElement("th");
+    rowNumTh.textContent = "#";
+    rowNumTh.style.width = "40px";
+    rowNumTh.style.textAlign = "right";
+    headerRow.appendChild(rowNumTh);
+    
     headerLabels.forEach(lbl => { const th = document.createElement("th"); th.textContent = lbl; headerRow.appendChild(th); });
     thead.appendChild(headerRow); tableEl.appendChild(thead);
 
     const tbody = document.createElement("tbody");
-    records.forEach(rec => {
+    records.forEach((rec, index) => {
         const tr = document.createElement("tr");
+        
+        // Add row number cell
+        const rowNumTd = document.createElement("td");
+        rowNumTd.textContent = index + 1;
+        rowNumTd.style.textAlign = "right";
+        rowNumTd.style.color = "#666";
+        tr.appendChild(rowNumTd);
+        
         headers.forEach(h => {
             const td = document.createElement("td");
             let val = rec[h];
@@ -315,6 +669,9 @@ function renderResult(result) {
 
     tableEl.appendChild(tbody);
     log.appendChild(tableEl);
+    
+    // Update results counter
+    document.getElementById('resultsCount').textContent = `Results: ${records.length}`;
 }
 
 document.addEventListener('DOMContentLoaded',()=>{ if(window.api) loadEnvironments(); });
