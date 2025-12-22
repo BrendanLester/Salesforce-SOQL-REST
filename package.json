@@ -1,5 +1,5 @@
 {
-  "name": "Salesforce SOQL & REST",
+  "name": "Playforce Tap",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,7 @@
   },
   "build": {
     "appId": "...",
-    "productName": "Salesforce SOQL & REST",
+    "productName": "Playforce Tap",
     "directories": {
       "output": "dist"
     },
