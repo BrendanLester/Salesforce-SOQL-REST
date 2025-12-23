@@ -1,5 +1,5 @@
 {
-  "name": "Playforce Tap",
+  "name": "Playforce Query",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,7 @@
   },
   "build": {
     "appId": "...",
-    "productName": "Playforce Tap",
+    "productName": "Playforce Query",
     "directories": {
       "output": "dist"
     },

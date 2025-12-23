@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Playforce Tap</title>
+<title>Playforce Query</title>
 <style>
 body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:sans-serif; }
 #toolbar { display:flex; gap:10px; padding:8px; background:#e8e8e8; border-bottom:1px solid #ccc; }
@@ -104,7 +104,7 @@ async function changeEnvironment() {
             msg.style.background="#d1ecf1"; msg.style.color="#0c5460"; msg.style.padding="5px";
             msg.textContent=`🔄 Switched to ${sel.value} environment`;
             log.appendChild(msg);
-            document.title = `Playforce Tap - ${sel.value}`;
+            document.title = `Playforce Query - ${sel.value}`;
         } else alert('Failed to switch environment');
     } catch(err){ alert(err.message); }
 }
