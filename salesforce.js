@@ -71,6 +71,14 @@ function loadConfig() {
             console.log('Loading config from:', currentConfigFile);
             configData = JSON.parse(fs.readFileSync(currentConfigFile, "utf-8"));
             console.log('Config loaded successfully');
+
+            // Apply defaults if missing
+            if (!configData.apiVersion) {
+                configData.apiVersion = "v57.0"; // default API version
+            }
+            if (!configData.grant_type) {
+                configData.grant_type = "client_credentials"; // default grant_type
+            }
         }
         return configData;
     } catch (error) {
@@ -90,42 +98,71 @@ function saveToken(tokenData) {
 }
 
 async function authenticate() {
-    console.log('authenticate() called');
+    console.log("authenticate() called");
+
     const config = loadConfig();
     if (!config) {
         throw new Error("No config selected or config file not found");
     }
 
-    const { client_id, client_secret, username, password, login_url } = config;
-    console.log('Using login_url:', login_url);
+    const {
+        login_url,
+        client_id,
+        client_secret,
+        grant_type,
+        username,
+        password,        
+    } = config;
+
+    console.log("Using login_url:", login_url);
+    console.log("Using grant_type:", grant_type);
+
+    const body = new URLSearchParams({
+        grant_type,
+        client_id,
+        client_secret
+    });
+
+    // Grant-type–specific fields
+    switch (grant_type) {
+        case "password":
+            if (!username || !password) {
+                throw new Error("username and password are required for password grant");
+            }
+            body.append("username", username);
+            body.append("password", password);
+            break;
+
+        case "client_credentials":
+            // No extra fields
+            // Note: Salesforce only allows this for specific connected apps
+            break;
+
+        default:
+            throw new Error(`Unsupported grant_type: ${grant_type}`);
+    }
 
     try {
-        console.log('Making authentication request...');
+        console.log("Making authentication request...");
         const res = await fetch(`${login_url}/services/oauth2/token`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({
-                grant_type: "password",
-                client_id,
-                client_secret,
-                username,
-                password
-            })
+            body
         });
 
-        console.log('Authentication response status:', res.status);
+        console.log("Authentication response status:", res.status);
         const data = await res.json();
 
         if (!res.ok) {
-            console.error('Authentication failed:', data);
+            console.error("Authentication failed:", data);
             throw new Error(`Salesforce auth failed: ${JSON.stringify(data)}`);
         }
 
-        console.log('Authentication successful');
+        console.log("Authentication successful");
         saveToken(data);
         return data;
     } catch (error) {
-        console.error('Authentication error:', error);
+        console.error("Authentication error:", error);
         throw error;
     }
 }
@@ -160,7 +197,7 @@ async function withTokenRetry(requestFn) {
 async function executeSOQL(query) {
     console.log('executeSOQL called with:', query);
     const config = loadConfig();
-    const apiVersion = config.apiVersion || "v57.0";
+    const apiVersion = config.apiVersion;
 
     return await withTokenRetry(async (token, instanceUrl) => {
         if (!token || !instanceUrl) {
@@ -190,7 +227,7 @@ async function executeSOQL(query) {
 
 async function executeREST(path) {
     const config = loadConfig();
-    const apiVersion = config.apiVersion || "v57.0";
+    const apiVersion = config.apiVersion;
 
     return await withTokenRetry(async (token, instanceUrl) => {
         if (!token || !instanceUrl) {
