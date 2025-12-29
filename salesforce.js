@@ -76,9 +76,11 @@ function loadConfig() {
             if (!configData.apiVersion) {
                 configData.apiVersion = "v57.0"; // default API version
             }
-            if (!configData.grant_type) {
-                configData.grant_type = "client_credentials"; // default grant_type
-            }
+
+            // Automatic grant_type determination
+            configData.grant_type = (configData.username && configData.password)
+                ? "password"
+                : "client_credentials";
         }
         return configData;
     } catch (error) {

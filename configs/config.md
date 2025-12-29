@@ -8,16 +8,16 @@ Each environment should have its own JSON file, for example:
 - test.json
 - prod.json
 
-## Supported Authentication Options
+## Authentication Behavior
 
-Playforce Query supports multiple Salesforce OAuth authentication flows.
-The authentication method is controlled using the optional `grant_type` field.
+Playforce Query automatically determines the OAuth flow based on the configuration:
 
-If `grant_type` is omitted, it defaults to "client_credentials".
+- If both `username` and `password` are provided → uses **password** flow.  
+- If `username` or `password` are missing → uses **client_credentials** flow. 
 
 ### Supported grant_type values
 
-- "client_credentials" (default)  
+- "client_credentials" (This is the default flow when no username/password are provided)  
   Uses only the client ID and client secret to authenticate the application.  
   Requires a Salesforce **External Client App** configured to allow the client credentials flow.  
   No username or password is needed.  
@@ -31,7 +31,6 @@ If `grant_type` is omitted, it defaults to "client_credentials".
   If a security token is required (for example, if the user's IP address is not trusted), append it **directly to the end of the password** when configuring the JSON file.  
   Example: `"password": "MyPasswordMYSECURITYTOKEN"`
 
-
 ## Example Config File (Client Credentials – Default)
 
 ```json
@@ -42,13 +41,13 @@ If `grant_type` is omitted, it defaults to "client_credentials".
 }
 ```
 
-grant_type can be omitted when using the default client_credentials flow.
+- No `username` or `password` → Playforce Query automatically uses **client_credentials**.  
+
 
 ## Example Config File (Password Grant)
 
 ```json
 {
-  "grant_type": "password",
   "client_id": "YOUR_CLIENT_ID",
   "client_secret": "YOUR_CLIENT_SECRET",
   "username": "user@example.com",
@@ -57,6 +56,8 @@ grant_type can be omitted when using the default client_credentials flow.
   "apiVersion": "v57.0"
 }
 ```
+- Both `username` and `password` provided → Playforce Query automatically uses **password** flow.  
+- Append the security token to the password if required.
 
 ## apiVersion
 
@@ -92,3 +93,4 @@ If authentication fails using the standard login or test domains, check the My D
 - Some Salesforce orgs do not allow client_credentials; in those cases, use the password grant
 - apiVersion defaults to "v57.0" if not specified
 - grant_type defaults to "client_credentials" if not specified
+- Future authentication methods (for example JWT) may introduce additional required fields
