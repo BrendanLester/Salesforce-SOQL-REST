@@ -105,8 +105,135 @@ async function changeEnvironment() {
             msg.textContent=`🔄 Switched to ${sel.value} environment`;
             log.appendChild(msg);
             document.title = `Playforce Query - ${sel.value}`;
+            
+            // Auto-authenticate based on grant type
+            await autoAuthenticate();
         } else alert('Failed to switch environment');
     } catch(err){ alert(err.message); }
+}
+
+// Auto-authenticate based on grant type
+async function autoAuthenticate() {
+    const log = document.getElementById('log');
+    
+    try {
+        // First check if we already have a valid token for this environment
+        const hasToken = await window.api.hasValidToken();
+        
+        if (hasToken) {
+            // Already authenticated - just show ready message
+            const readyMsg = document.createElement('div');
+            readyMsg.className = 'log-line';
+            readyMsg.style.background = "#d4edda";
+            readyMsg.style.color = "#155724";
+            readyMsg.style.padding = "5px";
+            readyMsg.textContent = `✅ Using cached token - Ready to execute queries`;
+            log.appendChild(readyMsg);
+            return;
+        }
+        
+        // No cached token, try authentication (will attempt client_credentials if no username/password)
+        const result = await window.api.tryAuthenticate();
+        
+        if (result.success) {
+            // Authentication successful
+            const readyMsg = document.createElement('div');
+            readyMsg.className = 'log-line';
+            readyMsg.style.background = "#d4edda";
+            readyMsg.style.color = "#155724";
+            readyMsg.style.padding = "5px";
+            const method = result.method === 'client_credentials' ? 'client credentials' : 'password';
+            readyMsg.textContent = `✅ Authenticated with ${method} - Ready to execute queries`;
+            log.appendChild(readyMsg);
+        } else if (result.needsOAuth) {
+            // Client credentials failed, need OAuth
+            const infoMsg = document.createElement('div');
+            infoMsg.className = 'log-line';
+            infoMsg.style.background = "#d1ecf1";
+            infoMsg.style.color = "#0c5460";
+            infoMsg.style.padding = "5px";
+            infoMsg.textContent = '🔐 Client credentials not available, starting OAuth flow...';
+            log.appendChild(infoMsg);
+            
+            // Start OAuth flow
+            const oauthResult = await window.api.startOAuthFlow();
+            
+            if (!oauthResult.success) {
+                throw new Error(oauthResult.error);
+            }
+            
+            const waitingMsg = document.createElement('div');
+            waitingMsg.className = 'log-line';
+            waitingMsg.style.background = "#fff3cd";
+            waitingMsg.style.color = "#856404";
+            waitingMsg.style.padding = "5px";
+            waitingMsg.textContent = '⏳ Please authenticate in your browser...';
+            log.appendChild(waitingMsg);
+        } else {
+            // Some other error
+            throw new Error(result.error || 'Authentication failed');
+        }
+    } catch (error) {
+        const errorMsg = document.createElement('div');
+        errorMsg.className = 'log-line';
+        errorMsg.style.background = "#f8d7da";
+        errorMsg.style.color = "#721c24";
+        errorMsg.style.padding = "5px";
+        errorMsg.textContent = `❌ Authentication Error: ${error.message}`;
+        log.appendChild(errorMsg);
+    }
+}
+
+// Setup OAuth callback handlers
+if (window.api?.onOAuthCallback) {
+    window.api.onOAuthCallback(async (authCode) => {
+        const log = document.getElementById('log');
+        
+        try {
+            const exchangeMsg = document.createElement('div');
+            exchangeMsg.className = 'log-line';
+            exchangeMsg.style.background = "#d1ecf1";
+            exchangeMsg.style.color = "#0c5460";
+            exchangeMsg.style.padding = "5px";
+            exchangeMsg.textContent = '🔄 Exchanging authorization code for access token...';
+            log.appendChild(exchangeMsg);
+            
+            const result = await window.api.exchangeAuthCode(authCode, 'http://localhost:8888/oauth/callback');
+            
+            if (result.success) {
+                const successMsg = document.createElement('div');
+                successMsg.className = 'log-line';
+                successMsg.style.background = "#d4edda";
+                successMsg.style.color = "#155724";
+                successMsg.style.padding = "5px";
+                successMsg.textContent = '✅ OAuth authentication successful! You can now execute queries.';
+                log.appendChild(successMsg);
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (error) {
+            const errorMsg = document.createElement('div');
+            errorMsg.className = 'log-line';
+            errorMsg.style.background = "#f8d7da";
+            errorMsg.style.color = "#721c24";
+            errorMsg.style.padding = "5px";
+            errorMsg.textContent = `❌ Token Exchange Error: ${error.message}`;
+            log.appendChild(errorMsg);
+        }
+    });
+}
+
+if (window.api?.onOAuthError) {
+    window.api.onOAuthError((error) => {
+        const log = document.getElementById('log');
+        const errorMsg = document.createElement('div');
+        errorMsg.className = 'log-line';
+        errorMsg.style.background = "#f8d7da";
+        errorMsg.style.color = "#721c24";
+        errorMsg.style.padding = "5px";
+        errorMsg.textContent = `❌ OAuth Error: ${error.error} - ${error.error_description || 'Unknown error'}`;
+        log.appendChild(errorMsg);
+    });
 }
 
 // Session save/load

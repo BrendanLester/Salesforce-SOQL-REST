@@ -27,7 +27,7 @@ if (!fs.existsSync(CONFIGS_DIR)) {
 
 let currentConfigFile = null;
 let configData = null;
-let currentToken = null; // token kept in memory only
+let tokenCache = {}; // Store tokens per config file: { configFileName: tokenData }
 
 function listConfigs() {
     try {
@@ -46,17 +46,19 @@ function setConfigFile(configName) {
     try {
         currentConfigFile = path.join(CONFIGS_DIR, `${configName}.json`);
         configData = null; // Reset cached config
-        currentToken = null; // clear in-memory token when switching config
+        // Don't clear token - keep it in tokenCache for this config
 
         if (fs.existsSync(currentConfigFile)) {
             console.log('Config file set to:', currentConfigFile);
             return true;
         } else {
             console.error('Config file does not exist:', currentConfigFile);
+            currentConfigFile = null;
             return false;
         }
     } catch (error) {
         console.error('Error setting config file:', error);
+        currentConfigFile = null;
         return false;
     }
 }
@@ -77,10 +79,15 @@ function loadConfig() {
                 configData.apiVersion = "v57.0"; // default API version
             }
 
-            // Automatic grant_type determination
-            configData.grant_type = (configData.username && configData.password)
-                ? "password"
-                : "client_credentials";
+            // Automatic grant_type determination - only if not explicitly set
+            if (!configData.grant_type) {
+                if (configData.username && configData.password) {
+                    configData.grant_type = "password";
+                } else {
+                    // No username/password - will try client_credentials first, then OAuth
+                    configData.grant_type = "client_credentials";
+                }
+            }
         }
         return configData;
     } catch (error) {
@@ -89,14 +96,16 @@ function loadConfig() {
     }
 }
 
-// In-memory token management
+// In-memory token management - per config file
 function loadToken() {
-    return currentToken;
+    if (!currentConfigFile) return null;
+    return tokenCache[currentConfigFile] || null;
 }
 
 function saveToken(tokenData) {
-    currentToken = tokenData;
-    console.log('Token saved in memory only');
+    if (!currentConfigFile) return;
+    tokenCache[currentConfigFile] = tokenData;
+    console.log('Token saved in memory for:', path.basename(currentConfigFile));
 }
 
 async function authenticate() {
@@ -118,6 +127,11 @@ async function authenticate() {
 
     console.log("Using login_url:", login_url);
     console.log("Using grant_type:", grant_type);
+
+    // For authorization_code, we need to trigger the OAuth flow
+    if (grant_type === "authorization_code") {
+        throw new Error("Please use startOAuthFlow() for authorization_code grant type");
+    }
 
     const body = new URLSearchParams({
         grant_type,
@@ -167,6 +181,72 @@ async function authenticate() {
         console.error("Authentication error:", error);
         throw error;
     }
+}
+
+// Exchange authorization code for access token
+async function authenticateWithAuthCode(authCode, redirectUri) {
+    console.log("authenticateWithAuthCode() called");
+
+    const config = loadConfig();
+    if (!config) {
+        throw new Error("No config selected or config file not found");
+    }
+
+    const {
+        login_url,
+        client_id,
+        client_secret
+    } = config;
+
+    const body = new URLSearchParams({
+        grant_type: "authorization_code",
+        code: authCode,
+        client_id,
+        client_secret,
+        redirect_uri: redirectUri
+    });
+
+    try {
+        console.log("Exchanging authorization code for access token...");
+        const res = await fetch(`${login_url}/services/oauth2/token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body
+        });
+
+        console.log("Token exchange response status:", res.status);
+        const data = await res.json();
+
+        if (!res.ok) {
+            console.error("Token exchange failed:", data);
+            throw new Error(`Salesforce token exchange failed: ${JSON.stringify(data)}`);
+        }
+
+        console.log("Token exchange successful");
+        saveToken(data);
+        return data;
+    } catch (error) {
+        console.error("Token exchange error:", error);
+        throw error;
+    }
+}
+
+// Generate OAuth authorization URL
+function getAuthorizationUrl(redirectUri) {
+    const config = loadConfig();
+    if (!config) {
+        throw new Error("No config selected or config file not found");
+    }
+
+    const { login_url, client_id } = config;
+    const params = new URLSearchParams({
+        response_type: "code",
+        client_id,
+        redirect_uri: redirectUri,
+        prompt: "login"
+    });
+
+    return `${login_url}/services/oauth2/authorize?${params.toString()}`;
 }
 
 async function getAccessToken(forceRefresh = false) {
@@ -255,12 +335,66 @@ async function executeREST(path) {
     });
 }
 
+// Get current config info for debugging
+function getCurrentConfig() {
+    const hasToken = currentConfigFile ? !!tokenCache[currentConfigFile] : false;
+    return {
+        currentConfigFile,
+        hasConfigData: !!configData,
+        hasToken
+    };
+}
+
+// Check if current config requires OAuth
+function requiresOAuth() {
+    // We'll always try client_credentials first, then fall back to OAuth
+    return false;
+}
+
+// Check if we have a cached token for current config
+function hasValidToken() {
+    const token = loadToken();
+    return !!token && !!token.access_token;
+}
+
+// Try to authenticate with automatic fallback from client_credentials to OAuth
+async function tryAuthenticate() {
+    const config = loadConfig();
+    if (!config) {
+        throw new Error("No config selected or config file not found");
+    }
+
+    // If it has username/password, use password grant
+    if (config.username && config.password) {
+        console.log('Using password grant');
+        await authenticate();
+        return { success: true, method: 'password' };
+    }
+
+    // Otherwise, try client_credentials first
+    console.log('Attempting client_credentials authentication...');
+    try {
+        await authenticate();
+        console.log('Client credentials authentication successful');
+        return { success: true, method: 'client_credentials' };
+    } catch (error) {
+        console.log('Client credentials failed, OAuth required:', error.message);
+        return { success: false, needsOAuth: true, error: error.message };
+    }
+}
+
 module.exports = {
     executeSOQL,
     executeREST,
     setConfigFile,
     listConfigs,
-    getAccessToken
+    getAccessToken,
+    getAuthorizationUrl,
+    authenticateWithAuthCode,
+    getCurrentConfig,
+    requiresOAuth,
+    tryAuthenticate,
+    hasValidToken
 };
 
 console.log('salesforce.js loaded successfully');
