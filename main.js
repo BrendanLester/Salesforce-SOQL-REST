@@ -186,13 +186,53 @@ ipcMain.handle('exchange-auth-code', async (event, authCode, redirectUri) => {
     }
 });
 
-// Handle SOQL execution
-ipcMain.handle('execute-soql', async (event, query) => {
+// Track abort controllers for each query
+const abortControllers = new Map();
+
+// Handle SOQL execution with pagination progress
+ipcMain.handle('execute-soql', async (event, query, queryId) => {
     try {
-        return await salesforce.executeSOQL(query);
+        // Create abort controller for this query
+        const abortController = new AbortController();
+        if (queryId) {
+            abortControllers.set(queryId, abortController);
+        }
+        
+        const result = await salesforce.executeSOQL(query, (progress) => {
+            // Send progress updates to the renderer
+            event.sender.send('soql-progress', progress);
+        }, abortController.signal);
+        
+        // Clean up abort controller
+        if (queryId) {
+            abortControllers.delete(queryId);
+        }
+        
+        return result;
     } catch (error) {
         console.error('Error executing SOQL:', error);
+        // Clean up abort controller on error
+        if (queryId) {
+            abortControllers.delete(queryId);
+        }
         throw error;
+    }
+});
+
+// Handle query abort
+ipcMain.handle('abort-query', async (event, queryId) => {
+    try {
+        const controller = abortControllers.get(queryId);
+        if (controller) {
+            console.log('Aborting query:', queryId);
+            controller.abort();
+            abortControllers.delete(queryId);
+            return { success: true };
+        }
+        return { success: false, error: 'Query not found' };
+    } catch (error) {
+        console.error('Error aborting query:', error);
+        return { success: false, error: error.message };
     }
 });
 

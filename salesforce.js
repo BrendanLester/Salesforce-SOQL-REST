@@ -276,7 +276,7 @@ async function withTokenRetry(requestFn) {
     }
 }
 
-async function executeSOQL(query) {
+async function executeSOQL(query, onProgress = null, abortSignal = null) {
     console.log('executeSOQL called with:', query);
     const config = loadConfig();
     const apiVersion = config.apiVersion;
@@ -289,12 +289,17 @@ async function executeSOQL(query) {
         const url = `${instanceUrl}/services/data/${apiVersion}/query/?q=${encodeURIComponent(query)}`;
         console.log('Making SOQL request to:', url);
 
-        const res = await fetch(url, {
+        const fetchOptions = {
             headers: {
                 "Authorization": `Bearer ${token}`,
                 "Content-Type": "application/json"
             }
-        });
+        };
+        if (abortSignal) {
+            fetchOptions.signal = abortSignal;
+        }
+
+        const res = await fetch(url, fetchOptions);
 
         if (!res.ok) {
             const text = await res.text();
@@ -303,6 +308,75 @@ async function executeSOQL(query) {
 
         const result = await res.json();
         console.log('SOQL success, returned', result.totalSize, 'records');
+        
+        // If there are more records, fetch them automatically
+        if (result.nextRecordsUrl) {
+            console.log('Fetching additional pages...');
+            let allRecords = result.records || [];
+            let nextUrl = result.nextRecordsUrl;
+            let pageCount = 1;
+            
+            // Report initial batch if callback provided
+            if (onProgress) {
+                onProgress({
+                    records: allRecords,
+                    totalSize: result.totalSize,
+                    fetchedCount: allRecords.length,
+                    done: false,
+                    pageNumber: pageCount
+                });
+            }
+            
+            // Fetch remaining pages
+            while (nextUrl) {
+                pageCount++;
+                const pageUrl = `${instanceUrl}${nextUrl}`;
+                console.log(`Fetching page ${pageCount}:`, pageUrl);
+                
+                const pageFetchOptions = {
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "Content-Type": "application/json"
+                    }
+                };
+                if (abortSignal) {
+                    pageFetchOptions.signal = abortSignal;
+                }
+                
+                const pageRes = await fetch(pageUrl, pageFetchOptions);
+                
+                if (!pageRes.ok) {
+                    const text = await pageRes.text();
+                    console.error(`Error fetching page ${pageCount}:`, text);
+                    break;
+                }
+                
+                const pageData = await pageRes.json();
+                allRecords = allRecords.concat(pageData.records || []);
+                nextUrl = pageData.nextRecordsUrl;
+                
+                console.log(`Page ${pageCount} fetched: ${pageData.records?.length || 0} records, total so far: ${allRecords.length}`);
+                
+                // Report progress if callback provided
+                if (onProgress) {
+                    onProgress({
+                        records: allRecords,
+                        totalSize: result.totalSize,
+                        fetchedCount: allRecords.length,
+                        done: !nextUrl,
+                        pageNumber: pageCount
+                    });
+                }
+            }
+            
+            // Return complete result with all records
+            return {
+                ...result,
+                records: allRecords,
+                done: true
+            };
+        }
+        
         return result;
     });
 }

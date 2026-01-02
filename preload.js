@@ -6,8 +6,9 @@ try {
     // All operations now go through IPC to main process
     // This ensures we're using the same salesforce.js module instance
     contextBridge.exposeInMainWorld('api', {
-        executeSOQL: (query) => ipcRenderer.invoke('execute-soql', query),
+        executeSOQL: (query, queryId) => ipcRenderer.invoke('execute-soql', query, queryId),
         executeREST: (path) => ipcRenderer.invoke('execute-rest', path),
+        abortQuery: (queryId) => ipcRenderer.invoke('abort-query', queryId),
         setConfigFile: (configName) => ipcRenderer.invoke('set-config-file', configName),
         listConfigs: () => ipcRenderer.invoke('list-configs'),
         getCurrentConfig: () => ipcRenderer.invoke('get-current-config'),
@@ -19,7 +20,10 @@ try {
         startOAuthFlow: () => ipcRenderer.invoke('start-oauth-flow'),
         exchangeAuthCode: (authCode, redirectUri) => ipcRenderer.invoke('exchange-auth-code', authCode, redirectUri),
         onOAuthCallback: (callback) => ipcRenderer.on('oauth-callback', (event, code) => callback(code)),
-        onOAuthError: (callback) => ipcRenderer.on('oauth-error', (event, error) => callback(error))
+        onOAuthError: (callback) => ipcRenderer.on('oauth-error', (event, error) => callback(error)),
+        
+        // Pagination progress listener
+        onSOQLProgress: (callback) => ipcRenderer.on('soql-progress', (event, progress) => callback(progress))
     });
 
     console.log('API exposed successfully via contextBridge - all operations via IPC');

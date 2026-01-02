@@ -25,6 +25,8 @@ tr:hover { background:#fffae6; }
 
 #results-header { display:flex; justify-content:flex-end; padding:4px 8px; border-bottom:1px solid #ccc; background:#f5f5f5; }
 #copyResultsBtn { padding:4px 8px; font-size:12px; cursor:pointer; }
+#stopQueryBtn { padding:4px 8px; font-size:12px; cursor:pointer; background:#dc3545; color:white; border:none; border-radius:4px; margin-right:8px; display:none; }
+#stopQueryBtn:hover { background:#c82333; }
 
 .search-box { position:absolute; top:10px; right:10px; background:#fff; border:2px solid #0066cc; border-radius:4px; padding:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:1000; display:none; }
 .search-box input { border:1px solid #ccc; padding:4px; margin-right:4px; font-size:12px; }
@@ -61,6 +63,7 @@ tr:hover { background:#fffae6; }
 <div id="bottom" style="background:#fff; display:flex; flex-direction:column; position:relative;">
     <div id="results-header">
         <span id="resultsCount" style="font-size:12px; color:#666; margin-right:auto;"></span>
+        <button id="stopQueryBtn" onclick="stopQuery()">⏹ Stop Query</button>
         <button id="copyResultsBtn">📋 Copy Results</button>
     </div>
     <div id="log" tabindex="0">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
@@ -310,17 +313,20 @@ log.addEventListener('keydown',e=>{
 // Auto-focus log when clicked
 log.addEventListener('click', () => log.focus());
 
-// Global Escape handler to close search boxes
+// Global Escape handler to close search boxes or stop query
 document.addEventListener('keydown', e => {
     if(e.key === 'Escape') {
         const editorSearch = document.getElementById('editorSearch');
         const logSearch = document.getElementById('logSearch');
         
+        // Priority 1: Close search boxes if open
         if(editorSearch.style.display === 'block') {
             closeSearch('editor');
-        }
-        if(logSearch.style.display === 'block') {
+        } else if(logSearch.style.display === 'block') {
             closeSearch('log');
+        } else if(currentQueryId) {
+            // Priority 2: Stop running query if no search boxes are open
+            stopQuery();
         }
     }
 });
@@ -621,6 +627,99 @@ document.getElementById('logSearchInput').addEventListener('input', e => {
     }
 });
 
+// Global variables to track current query and table for progressive rendering
+let currentQueryId = null;
+let currentTable = null;
+let currentTbody = null;
+
+// Stop query function
+async function stopQuery() {
+    if (!currentQueryId) return;
+    
+    try {
+        console.log('Stopping query:', currentQueryId);
+        await window.api.abortQuery(currentQueryId);
+        currentQueryId = null;
+    } catch (error) {
+        console.error('Error stopping query:', error);
+    }
+}
+
+// Listen for pagination progress events
+if(window.api?.onSOQLProgress) {
+    window.api.onSOQLProgress((progress) => {
+        console.log('Progress update:', progress);
+        
+        if (!progress.records || progress.records.length === 0) return;
+        
+        const headers = Object.keys(progress.records[0]).filter(h => h !== "attributes");
+        
+        // If table doesn't exist yet, create it with first batch
+        if (!currentTable || !currentTbody) {
+            const headerLabels = headers.map(h => (/^expr\d+$/i.test(h) && headers.length === 1) ? "COUNT" : h);
+            const tableEl = document.createElement("table");
+            const thead = document.createElement("thead");
+            const headerRow = document.createElement("tr");
+            
+            // Add row number column header
+            const rowNumTh = document.createElement("th");
+            rowNumTh.textContent = "#";
+            rowNumTh.style.width = "40px";
+            rowNumTh.style.textAlign = "right";
+            headerRow.appendChild(rowNumTh);
+            
+            headerLabels.forEach(lbl => { const th = document.createElement("th"); th.textContent = lbl; headerRow.appendChild(th); });
+            thead.appendChild(headerRow); tableEl.appendChild(thead);
+            
+            const tbody = document.createElement("tbody");
+            tableEl.appendChild(tbody);
+            log.appendChild(tableEl);
+            
+            currentTable = tableEl;
+            currentTbody = tbody;
+        }
+        
+        // Add new rows
+        const existingRowCount = currentTbody.children.length;
+        const newRecords = progress.records.slice(existingRowCount);
+        
+        newRecords.forEach((rec, idx) => {
+            const tr = document.createElement("tr");
+            
+            // Add row number cell
+            const rowNumTd = document.createElement("td");
+            rowNumTd.textContent = existingRowCount + idx + 1;
+            rowNumTd.style.textAlign = "right";
+            rowNumTd.style.color = "#666";
+            tr.appendChild(rowNumTd);
+            
+            headers.forEach(h => {
+                const td = document.createElement("td");
+                let val = rec[h];
+                if (val === null || val === undefined) td.textContent = "";
+                else if (typeof val === "object") {
+                    if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
+                    else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
+                } else td.textContent = String(val);
+                tr.appendChild(td);
+            });
+            currentTbody.appendChild(tr);
+        });
+        
+        // Update counter
+        if (progress.done) {
+            const totalSize = progress.totalSize || progress.fetchedCount;
+            if (totalSize > progress.fetchedCount) {
+                document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} of ${totalSize}`;
+            } else {
+                document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount}`;
+            }
+        } else {
+            document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} of ${progress.totalSize} (fetching page ${progress.pageNumber}...)`;
+        }
+    });
+}
+
 // Ctrl+E handler supporting multi-line SOQL separated by blank lines
 editor.addEventListener("keydown",async e=>{
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='e'){
@@ -674,7 +773,11 @@ editor.addEventListener("keydown",async e=>{
         editor.focus();
 
         log.innerHTML='';
+        currentTable = null;
+        currentTbody = null;
+        currentQueryId = 'query_' + Date.now();
         document.getElementById('resultsCount').textContent = '';
+        document.getElementById('stopQueryBtn').style.display = 'inline-block';
         document.body.style.cursor = 'wait';
         editor.style.cursor = 'wait';
         try{
@@ -682,7 +785,7 @@ editor.addEventListener("keydown",async e=>{
             if(soqlKeywords.test(targetBlock)){
                 // Remove // and -- comments from SOQL
                 const cleanedBlock = targetBlock.split('\n').map(l=>l.replace(/(\/\/|--).*/,'').trim()).join('\n').trim();
-                const result = await window.api.executeSOQL(cleanedBlock);
+                const result = await window.api.executeSOQL(cleanedBlock, currentQueryId);
                 renderResult(result);
             } else {
                 // Treat each non-empty line as a REST path
@@ -703,9 +806,18 @@ editor.addEventListener("keydown",async e=>{
             }
         } catch(err){
             const errEl=document.createElement("div"); errEl.className="log-line";
-            errEl.innerHTML=`❌ ${err.message.replace(/\n/g,'<br>')}`;
+            // Check if it was aborted
+            if (err.name === 'AbortError' || err.message.includes('aborted')) {
+                errEl.style.background = '#fff3cd';
+                errEl.style.color = '#856404';
+                errEl.innerHTML = '⏹ Query was stopped';
+            } else {
+                errEl.innerHTML=`❌ ${err.message.replace(/\n/g,'<br>')}`;
+            }
             log.appendChild(errEl);
         }
+        document.getElementById('stopQueryBtn').style.display = 'none';
+        currentQueryId = null;
         document.body.style.cursor = 'default';
         editor.style.cursor = 'text';
         log.scrollTop = 0;
@@ -714,6 +826,18 @@ editor.addEventListener("keydown",async e=>{
 
 // Render results helper
 function renderResult(result) {
+    // If table was already rendered progressively, just update the final counter
+    if (currentTable && currentTbody) {
+        const records = result.records || result;
+        const totalSize = result.totalSize || records.length;
+        if (totalSize > records.length) {
+            document.getElementById('resultsCount').textContent = `Results: ${records.length} of ${totalSize}`;
+        } else {
+            document.getElementById('resultsCount').textContent = `Results: ${records.length}`;
+        }
+        return;
+    }
+    
     if (result && result.totalSize !== undefined && (!result.records || result.records.length === 0)) {
         const tableEl = document.createElement("table");
         const thead = document.createElement("thead");
@@ -771,6 +895,10 @@ function renderResult(result) {
     thead.appendChild(headerRow); tableEl.appendChild(thead);
 
     const tbody = document.createElement("tbody");
+    
+    // Store references for progressive rendering
+    currentTable = tableEl;
+    currentTbody = tbody;
     records.forEach((rec, index) => {
         const tr = document.createElement("tr");
         
@@ -797,8 +925,13 @@ function renderResult(result) {
     tableEl.appendChild(tbody);
     log.appendChild(tableEl);
     
-    // Update results counter
-    document.getElementById('resultsCount').textContent = `Results: ${records.length}`;
+    // Update results counter - show if pagination occurred
+    const totalSize = result.totalSize || records.length;
+    if (totalSize > records.length) {
+        document.getElementById('resultsCount').textContent = `Results: ${records.length} of ${totalSize}`;
+    } else {
+        document.getElementById('resultsCount').textContent = `Results: ${records.length}`;
+    }
 }
 
 document.addEventListener('DOMContentLoaded',()=>{ if(window.api) loadEnvironments(); });
