@@ -77,6 +77,9 @@ tr:hover { background:#fffae6; }
 </div>
 
 <script>
+// Global variable to store the actual OAuth redirect URI
+let currentRedirectUri = null;
+
 // Highlight SOQL keywords
 function highlightSOQL(query) {
     const keywords = /\b(SELECT|FROM|WHERE|LIMIT|ORDER BY|GROUP BY|AND|OR|NOT|NULL)\b/gi;
@@ -165,6 +168,21 @@ async function autoAuthenticate() {
                 throw new Error(oauthResult.error);
             }
             
+            // Store the actual redirect URI that was used
+            currentRedirectUri = oauthResult.redirectUri;
+            
+            // Warn if using non-default port
+            if (!currentRedirectUri.includes(':8888/')) {
+                const portWarning = document.createElement('div');
+                portWarning.className = 'log-line';
+                portWarning.style.background = "#fff3cd";
+                portWarning.style.color = "#856404";
+                portWarning.style.padding = "5px";
+                portWarning.style.fontWeight = "bold";
+                portWarning.textContent = `⚠️ Using ${currentRedirectUri} - Make sure ALL ports (8888-8892) are configured in your Salesforce External Client App!`;
+                log.appendChild(portWarning);
+            }
+            
             const waitingMsg = document.createElement('div');
             waitingMsg.className = 'log-line';
             waitingMsg.style.background = "#fff3cd";
@@ -201,7 +219,11 @@ if (window.api?.onOAuthCallback) {
             exchangeMsg.textContent = '🔄 Exchanging authorization code for access token...';
             log.appendChild(exchangeMsg);
             
-            const result = await window.api.exchangeAuthCode(authCode, 'http://localhost:8888/oauth/callback');
+            if (!currentRedirectUri) {
+                throw new Error('Redirect URI not found. Please restart the OAuth flow.');
+            }
+            
+            const result = await window.api.exchangeAuthCode(authCode, currentRedirectUri);
             
             if (result.success) {
                 const successMsg = document.createElement('div');

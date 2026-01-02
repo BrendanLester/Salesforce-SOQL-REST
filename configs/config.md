@@ -69,7 +69,13 @@ OAuth 2.0 is the recommended method for interactive use. It provides secure auth
    - **Contact Email**: Your email
 5. Enable OAuth Settings:
    - Check **Enable OAuth Settings**
-   - **Callback URL**: `http://localhost:8888/oauth/callback` (must be exact)
+   - **Callback URL**: Add **all of these** (for automatic port fallback):
+     - `http://localhost:8888/oauth/callback`
+     - `http://localhost:8889/oauth/callback`
+     - `http://localhost:8890/oauth/callback`
+     - `http://localhost:8891/oauth/callback`
+     - `http://localhost:8892/oauth/callback`
+   - **Why multiple ports?** Playforce Query automatically tries ports 8888-8892 to avoid conflicts with other applications
    - **Selected OAuth Scopes**: Add at least:
      - `Full access (full)`
      - `Perform requests at any time (refresh_token, offline_access)`
@@ -163,18 +169,18 @@ The `login_url` determines which Salesforce instance to authenticate against:
 
 - **Access tokens are stored in memory only** per environment and not persisted to disk
 - **Token caching** allows switching between environments without re-authentication
-- The OAuth callback server only runs on `localhost:8888` and is not accessible externally
+- The OAuth callback server only runs on `localhost` (ports 8888-8892) and is not accessible externally
 - Client secrets should be kept secure; do not commit config files with real credentials to version control
 
 ## Troubleshooting
 
-### "OAuth callback server error"
-- **Cause**: Port 8888 is already in use
-- **Solution**: Close other applications using port 8888
+### "OAuth callback server error" or "Unable to start OAuth callback server"
+- **Cause**: Ports 8888-8892 are all in use
+- **Solution**: Close other applications using these ports. The app automatically tries 5 different ports to avoid conflicts.
 
 ### "redirect_uri_mismatch"
-- **Cause**: Callback URL in External Client App doesn't match
-- **Solution**: Ensure the External Client App has exactly `http://localhost:8888/oauth/callback` as a callback URL
+- **Cause**: Callback URL in External Client App doesn't match the port being used
+- **Solution**: Ensure the External Client App has **all callback URLs** for ports 8888-8892 (see setup instructions above)
 
 ### "invalid_client_id" or "invalid_client"
 - **Cause**: Incorrect credentials in config file

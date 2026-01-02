@@ -5,7 +5,9 @@ const url = require('url');
 
 let mainWindow;
 let oauthCallbackServer;
-const REDIRECT_URI = 'http://localhost:8888/oauth/callback';
+let actualRedirectUri = null; // Will be set when server starts
+const PORT_RANGE_START = 8888;
+const PORT_RANGE_END = 8892; // Try 5 ports
 
 function createWindow() {
     const preloadPath = path.join(__dirname, 'preload.js');
@@ -34,15 +36,15 @@ function createWindow() {
     mainWindow.loadFile('index.html');
 }
 
-// Setup OAuth callback server
+// Setup OAuth callback server with automatic port fallback
 function startOAuthCallbackServer() {
     return new Promise((resolve, reject) => {
-        if (oauthCallbackServer) {
-            resolve(REDIRECT_URI);
+        if (oauthCallbackServer && actualRedirectUri) {
+            resolve(actualRedirectUri);
             return;
         }
 
-        oauthCallbackServer = http.createServer((req, res) => {
+        const requestHandler = (req, res) => {
             const parsedUrl = url.parse(req.url, true);
             
             if (parsedUrl.pathname === '/oauth/callback') {
@@ -79,17 +81,51 @@ function startOAuthCallbackServer() {
                 res.writeHead(404, { 'Content-Type': 'text/plain' });
                 res.end('Not found');
             }
-        });
+        };
 
-        oauthCallbackServer.listen(8888, () => {
-            console.log('OAuth callback server listening on port 8888');
-            resolve(REDIRECT_URI);
-        });
+        oauthCallbackServer = http.createServer(requestHandler);
 
-        oauthCallbackServer.on('error', (err) => {
-            console.error('OAuth callback server error:', err);
-            reject(err);
-        });
+        // Try ports in range
+        let currentPort = PORT_RANGE_START;
+        
+        const tryNextPort = () => {
+            if (currentPort > PORT_RANGE_END) {
+                const errorMsg = `Unable to start OAuth callback server. Ports ${PORT_RANGE_START}-${PORT_RANGE_END} are all in use.\n\nPlease close other applications and try again.`;
+                console.error(errorMsg);
+                reject(new Error(errorMsg));
+                return;
+            }
+
+            oauthCallbackServer.listen(currentPort, '127.0.0.1', () => {
+                actualRedirectUri = `http://localhost:${currentPort}/oauth/callback`;
+                console.log(`OAuth callback server listening on port ${currentPort}`);
+                if (currentPort !== PORT_RANGE_START) {
+                    console.log(`Note: Using port ${currentPort} instead of ${PORT_RANGE_START}`);
+                }
+                resolve(actualRedirectUri);
+            });
+
+            oauthCallbackServer.once('error', (err) => {
+                if (err.code === 'EADDRINUSE') {
+                    console.log(`Port ${currentPort} is in use, trying next port...`);
+                    currentPort++;
+                    oauthCallbackServer.close();
+                    oauthCallbackServer = http.createServer(requestHandler);
+                    tryNextPort();
+                } else if (err.code === 'EACCES') {
+                    console.log(`Port ${currentPort} access denied (firewall/antivirus?), trying next port...`);
+                    currentPort++;
+                    oauthCallbackServer.close();
+                    oauthCallbackServer = http.createServer(requestHandler);
+                    tryNextPort();
+                } else {
+                    console.error('OAuth callback server error:', err);
+                    reject(err);
+                }
+            });
+        };
+
+        tryNextPort();
     });
 }
 
