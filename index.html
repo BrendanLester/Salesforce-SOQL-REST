@@ -653,6 +653,8 @@ document.getElementById('logSearchInput').addEventListener('input', e => {
 let currentQueryId = null;
 let currentTable = null;
 let currentTbody = null;
+let queryStartTime = null;
+let queryTimerInterval = null;
 
 // Stop query function
 async function stopQuery() {
@@ -661,6 +663,13 @@ async function stopQuery() {
     try {
         console.log('Stopping query:', currentQueryId);
         await window.api.abortQuery(currentQueryId);
+        
+        // Clear live timer
+        if (queryTimerInterval) {
+            clearInterval(queryTimerInterval);
+            queryTimerInterval = null;
+        }
+        
         currentQueryId = null;
     } catch (error) {
         console.error('Error stopping query:', error);
@@ -671,6 +680,12 @@ async function stopQuery() {
 if(window.api?.onSOQLProgress) {
     window.api.onSOQLProgress((progress) => {
         console.log('Progress update:', progress);
+        
+        // Clear the live timer once pagination starts
+        if (queryTimerInterval) {
+            clearInterval(queryTimerInterval);
+            queryTimerInterval = null;
+        }
         
         if (!progress.records || progress.records.length === 0) return;
         
@@ -730,14 +745,18 @@ if(window.api?.onSOQLProgress) {
         
         // Update counter
         if (progress.done) {
+            const elapsedMs = Date.now() - queryStartTime;
+            const elapsedSec = (elapsedMs / 1000).toFixed(2);
             const totalSize = progress.totalSize || progress.fetchedCount;
             if (totalSize > progress.fetchedCount) {
-                document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} of ${totalSize}`;
+                document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} of ${totalSize} (${elapsedSec}s)`;
             } else {
-                document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount}`;
+                document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} (${elapsedSec}s)`;
             }
         } else {
-            document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} of ${progress.totalSize} (fetching page ${progress.pageNumber}...)`;
+            const elapsedMs = Date.now() - queryStartTime;
+            const elapsedSec = (elapsedMs / 1000).toFixed(1);
+            document.getElementById('resultsCount').textContent = `Results: ${progress.fetchedCount} of ${progress.totalSize} (fetching page ${progress.pageNumber}... ${elapsedSec}s)`;
         }
     });
 }
@@ -798,8 +817,17 @@ editor.addEventListener("keydown",async e=>{
         currentTable = null;
         currentTbody = null;
         currentQueryId = 'query_' + Date.now();
+        queryStartTime = Date.now();
         document.getElementById('resultsCount').textContent = '';
         document.getElementById('stopQueryBtn').style.display = 'inline-block';
+        
+        // Start live timer to show execution progress
+        queryTimerInterval = setInterval(() => {
+            const elapsedMs = Date.now() - queryStartTime;
+            const elapsedSec = (elapsedMs / 1000).toFixed(1);
+            document.getElementById('resultsCount').textContent = `Executing... (${elapsedSec}s)`;
+        }, 100);
+        
         document.body.style.cursor = 'wait';
         editor.style.cursor = 'wait';
         try{
@@ -838,6 +866,13 @@ editor.addEventListener("keydown",async e=>{
             }
             log.appendChild(errEl);
         }
+        
+        // Clear live timer
+        if (queryTimerInterval) {
+            clearInterval(queryTimerInterval);
+            queryTimerInterval = null;
+        }
+        
         document.getElementById('stopQueryBtn').style.display = 'none';
         currentQueryId = null;
         document.body.style.cursor = 'default';
@@ -848,14 +883,17 @@ editor.addEventListener("keydown",async e=>{
 
 // Render results helper
 function renderResult(result) {
+    const elapsedMs = queryStartTime ? Date.now() - queryStartTime : 0;
+    const elapsedSec = (elapsedMs / 1000).toFixed(2);
+    
     // If table was already rendered progressively, just update the final counter
     if (currentTable && currentTbody) {
         const records = result.records || result;
         const totalSize = result.totalSize || records.length;
         if (totalSize > records.length) {
-            document.getElementById('resultsCount').textContent = `Results: ${records.length} of ${totalSize}`;
+            document.getElementById('resultsCount').textContent = `Results: ${records.length} of ${totalSize} (${elapsedSec}s)`;
         } else {
-            document.getElementById('resultsCount').textContent = `Results: ${records.length}`;
+            document.getElementById('resultsCount').textContent = `Results: ${records.length} (${elapsedSec}s)`;
         }
         return;
     }
@@ -870,7 +908,7 @@ function renderResult(result) {
         const tr = document.createElement("tr"); const td = document.createElement("td");
         td.textContent = result.totalSize; tr.appendChild(td); tbody.appendChild(tr); tableEl.appendChild(tbody);
         log.appendChild(tableEl);
-        document.getElementById('resultsCount').textContent = `Results: ${result.totalSize}`;
+        document.getElementById('resultsCount').textContent = `Results: ${result.totalSize} (${elapsedSec}s)`;
         return;
     }
 
@@ -878,7 +916,7 @@ function renderResult(result) {
         const pre = document.createElement("pre");
         pre.textContent = JSON.stringify(result, null, 2);
         log.appendChild(pre);
-        document.getElementById('resultsCount').textContent = 'Results: JSON Response';
+        document.getElementById('resultsCount').textContent = `Results: JSON Response (${elapsedSec}s)`;
         return;
     }
 
@@ -888,7 +926,7 @@ function renderResult(result) {
         emptyEl.className = "log-line";
         emptyEl.textContent = "⚠️ No records returned.";
         log.appendChild(emptyEl);
-        document.getElementById('resultsCount').textContent = 'Results: 0';
+        document.getElementById('resultsCount').textContent = `Results: 0 (${elapsedSec}s)`;
         return;
     }
 
@@ -950,9 +988,9 @@ function renderResult(result) {
     // Update results counter - show if pagination occurred
     const totalSize = result.totalSize || records.length;
     if (totalSize > records.length) {
-        document.getElementById('resultsCount').textContent = `Results: ${records.length} of ${totalSize}`;
+        document.getElementById('resultsCount').textContent = `Results: ${records.length} of ${totalSize} (${elapsedSec}s)`;
     } else {
-        document.getElementById('resultsCount').textContent = `Results: ${records.length}`;
+        document.getElementById('resultsCount').textContent = `Results: ${records.length} (${elapsedSec}s)`;
     }
 }
 
