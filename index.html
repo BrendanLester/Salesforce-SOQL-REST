@@ -13,12 +13,23 @@ body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:
 #splitter { height:5px; background:#888; cursor:row-resize; }
 textarea { width:100%; height:100%; resize:none; font-family:monospace; font-size:14px; box-sizing:border-box; padding:8px; overflow:auto; }
 textarea::selection { background:#ffd700; color:#000; }
-#log { padding:8px; font-family:monospace; font-size:14px; overflow:auto; flex:1; outline:none; }
+#log { padding:2px 2px 8px 2px; font-family:monospace; font-size:14px; overflow:hidden; flex:1; outline:none; position:relative; }
 #log:focus { box-shadow: inset 0 0 0 2px #0066cc; }
+#logContent { height:100%; overflow:auto; padding:2px 6px 12px 6px; box-sizing:border-box; }
 .log-line { padding:2px 0; border-bottom:1px solid #ccc; }
-table { width:100%; border-collapse:collapse; margin-top:4px; font-family:monospace; font-size:14px; }
+table { width:100%; border-collapse:separate; border-spacing:0; font-family:monospace; font-size:14px; margin-bottom:20px; }
 th, td { border:1px solid #ccc; padding:4px 8px; text-align:left; }
-th { background:#eee; }
+th { background:#eee; position:sticky; top:0; z-index:10; }
+th::before { content:''; position:absolute; left:0; right:0; top:-8px; height:8px; background:#fff; z-index:1; }
+th::after { content:attr(data-content); position:relative; z-index:2; }
+th.sortable { cursor:pointer; user-select:none; }
+th.sortable:hover { background:#ddd; }
+th.sorted::after { margin-left:5px; }
+th.sorted.asc::after { content:'▲'; }
+th.sorted.desc::after { content:'▼'; }
+th.sorted::after { margin-left:5px; }
+th.sorted.asc::after { content:'▲'; }
+th.sorted.desc::after { content:'▼'; }
 tr:nth-child(even) { background:#f9f9f9; }
 tr:hover { background:#fffae6; }
 .keyword { color:#d73a49; font-weight:bold; }
@@ -91,6 +102,10 @@ tr:hover { background:#fffae6; }
             <tr><td>PgUp / PgDn</td><td>Jump 5 items</td></tr>
             <tr><td>Escape</td><td>Close popup/search</td></tr>
         </table>
+        <div style="margin-top:12px; padding:8px; background:#f8f9fa; border-radius:4px; font-size:11px; color:#555;">
+            <strong>REST Syntax:</strong> Type <code style="background:#e9ecef; padding:2px 4px; border-radius:2px;">ObjectName/Id</code><br>
+            Example: <code style="background:#e9ecef; padding:2px 4px; border-radius:2px;">Account/001xx000003DGb0AAG</code>
+        </div>
         <div style="margin-top:15px; padding-top:10px; border-top:1px solid #eee; font-size:12px; color:#666; text-align:center;">
             Learn more at <a href="#" onclick="event.preventDefault(); window.api.openExternal('https://getplayforce.com/')" style="color:#0066cc;">getplayforce.com</a>
         </div>
@@ -118,7 +133,9 @@ tr:hover { background:#fffae6; }
         <button id="exportCsvBtn" onclick="exportToCSV()" tabindex="-1" style="display:none;">📊 Export CSV</button>
         <button id="copyResultsBtn" tabindex="-1">📋 Copy Results</button>
     </div>
-    <div id="log" tabindex="0">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
+    <div id="log" tabindex="0">
+        <div id="logContent">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
+    </div>
     <div id="logSearch" class="search-box">
         <input type="text" placeholder="Search..." id="logSearchInput">
         <span id="logMatchCount" style="font-size:11px; color:#666; margin-right:4px;"></span>
@@ -142,6 +159,10 @@ let autocompleteEnabled = localStorage.getItem('autocompleteEnabled') !== 'false
 
 // Store current result data for export
 let currentResultData = null;
+
+// Sort state
+let currentSortColumn = null;
+let currentSortDirection = 'asc';
 
 // Toggle autocomplete feature
 function toggleAutocomplete() {
@@ -265,12 +286,12 @@ async function changeEnvironment() {
             sobjectsCache = null;
             objectFieldsCache = {};
             
-            log.innerHTML='';
+            logContent.innerHTML='';
             const msg = document.createElement('div');
             msg.className='log-line';
             msg.style.background="#d1ecf1"; msg.style.color="#0c5460"; msg.style.padding="5px";
             msg.textContent=`🔄 Switched to ${sel.value} environment`;
-            log.appendChild(msg);
+            logContent.appendChild(msg);
             document.title = `Playforce Query - ${sel.value}`;
             
             // Auto-authenticate based on grant type
@@ -284,7 +305,7 @@ async function changeEnvironment() {
 
 // Auto-authenticate based on grant type
 async function autoAuthenticate() {
-    const log = document.getElementById('log');
+    const log = document.getElementById('logContent');
     
     try {
         // First check if we already have a valid token for this environment
@@ -298,7 +319,7 @@ async function autoAuthenticate() {
             readyMsg.style.color = "#155724";
             readyMsg.style.padding = "5px";
             readyMsg.textContent = `✅ Using cached token - Ready to execute queries`;
-            log.appendChild(readyMsg);
+            logContent.appendChild(readyMsg);
             return;
         }
         
@@ -314,7 +335,7 @@ async function autoAuthenticate() {
             readyMsg.style.padding = "5px";
             const method = result.method === 'client_credentials' ? 'client credentials' : 'password';
             readyMsg.textContent = `✅ Authenticated with ${method} - Ready to execute queries`;
-            log.appendChild(readyMsg);
+            logContent.appendChild(readyMsg);
         } else if (result.needsOAuth) {
             // Client credentials failed, need OAuth
             const infoMsg = document.createElement('div');
@@ -323,7 +344,7 @@ async function autoAuthenticate() {
             infoMsg.style.color = "#0c5460";
             infoMsg.style.padding = "5px";
             infoMsg.textContent = '🔐 Client credentials not available, starting OAuth flow...';
-            log.appendChild(infoMsg);
+            logContent.appendChild(infoMsg);
             
             // Start OAuth flow
             const oauthResult = await window.api.startOAuthFlow();
@@ -344,7 +365,7 @@ async function autoAuthenticate() {
                 portWarning.style.padding = "5px";
                 portWarning.style.fontWeight = "bold";
                 portWarning.textContent = `⚠️ Using ${currentRedirectUri} - Make sure ALL ports (8888-8892) are configured in your Salesforce External Client App!`;
-                log.appendChild(portWarning);
+                logContent.appendChild(portWarning);
             }
             
             const waitingMsg = document.createElement('div');
@@ -353,7 +374,7 @@ async function autoAuthenticate() {
             waitingMsg.style.color = "#856404";
             waitingMsg.style.padding = "5px";
             waitingMsg.textContent = '⏳ Please authenticate in your browser...';
-            log.appendChild(waitingMsg);
+            logContent.appendChild(waitingMsg);
         } else {
             // Some other error
             throw new Error(result.error || 'Authentication failed');
@@ -365,14 +386,14 @@ async function autoAuthenticate() {
         errorMsg.style.color = "#721c24";
         errorMsg.style.padding = "5px";
         errorMsg.textContent = `❌ Authentication Error: ${error.message}`;
-        log.appendChild(errorMsg);
+        logContent.appendChild(errorMsg);
     }
 }
 
 // Setup OAuth callback handlers
 if (window.api?.onOAuthCallback) {
     window.api.onOAuthCallback(async (authCode) => {
-        const log = document.getElementById('log');
+        const log = document.getElementById('logContent');
         
         try {
             const exchangeMsg = document.createElement('div');
@@ -381,7 +402,7 @@ if (window.api?.onOAuthCallback) {
             exchangeMsg.style.color = "#0c5460";
             exchangeMsg.style.padding = "5px";
             exchangeMsg.textContent = '🔄 Exchanging authorization code for access token...';
-            log.appendChild(exchangeMsg);
+            logContent.appendChild(exchangeMsg);
             
             if (!currentRedirectUri) {
                 throw new Error('Redirect URI not found. Please restart the OAuth flow.');
@@ -396,7 +417,7 @@ if (window.api?.onOAuthCallback) {
                 successMsg.style.color = "#155724";
                 successMsg.style.padding = "5px";
                 successMsg.textContent = '✅ OAuth authentication successful! You can now execute queries.';
-                log.appendChild(successMsg);
+                logContent.appendChild(successMsg);
             } else {
                 throw new Error(result.error);
             }
@@ -407,21 +428,21 @@ if (window.api?.onOAuthCallback) {
             errorMsg.style.color = "#721c24";
             errorMsg.style.padding = "5px";
             errorMsg.textContent = `❌ Token Exchange Error: ${error.message}`;
-            log.appendChild(errorMsg);
+            logContent.appendChild(errorMsg);
         }
     });
 }
 
 if (window.api?.onOAuthError) {
     window.api.onOAuthError((error) => {
-        const log = document.getElementById('log');
+        const log = document.getElementById('logContent');
         const errorMsg = document.createElement('div');
         errorMsg.className = 'log-line';
         errorMsg.style.background = "#f8d7da";
         errorMsg.style.color = "#721c24";
         errorMsg.style.padding = "5px";
         errorMsg.textContent = `❌ OAuth Error: ${error.error} - ${error.error_description || 'Unknown error'}`;
-        log.appendChild(errorMsg);
+        logContent.appendChild(errorMsg);
     });
 }
 
@@ -442,10 +463,10 @@ function loadSession(e){
     const reader=new FileReader();
     reader.onload=function(ev){
         editor.value=ev.target.result;
-        log.innerHTML=''; const msg=document.createElement('div');
+        logContent.innerHTML=''; const msg=document.createElement('div');
         msg.className='log-line'; msg.style.background="#d4edda"; msg.style.color="#155724"; msg.style.padding="5px";
         msg.textContent=`✅ Session loaded from ${file.name}`;
-        log.appendChild(msg);
+        logContent.appendChild(msg);
     }; reader.readAsText(file); e.target.value='';
 }
 
@@ -484,6 +505,7 @@ document.addEventListener("mouseup", () => {
 
 const editor = document.getElementById("editor");
 const log = document.getElementById("log");
+const logContent = document.getElementById("logContent");
 
 // Format Salesforce error messages for better readability
 function formatErrorMessage(errorMessage) {
@@ -633,7 +655,7 @@ function clearHighlights(pane) {
         document.getElementById('editorMatchCount').textContent = '';
     } else {
         // For log, remove highlight spans
-        const highlights = log.querySelectorAll('.search-highlight, .search-current');
+        const highlights = logContent.querySelectorAll('.search-highlight, .search-current');
         highlights.forEach(span => {
             const parent = span.parentNode;
             parent.replaceChild(document.createTextNode(span.textContent), span);
@@ -710,7 +732,7 @@ function findInLog(searchText, direction = 1) {
     // Only rebuild matches if search text changed
     if(!currentMatches['log'] || currentMatches['log'].searchText !== searchText) {
         clearHighlights('log');
-        const text = log.textContent;
+        const text = logContent.textContent;
         const regex = new RegExp(escapeRegex(searchText), 'gi');
         let match;
         const matches = [];
@@ -741,7 +763,7 @@ function findInLog(searchText, direction = 1) {
 
 function highlightLogMatches(searchText, currentIndex) {
     // Check if highlights already exist
-    const existingHighlights = log.querySelectorAll('.search-highlight, .search-current');
+    const existingHighlights = logContent.querySelectorAll('.search-highlight, .search-current');
     
     if(existingHighlights.length === 0) {
         // First time highlighting - walk through text nodes only
@@ -793,7 +815,7 @@ function highlightLogMatches(searchText, currentIndex) {
             }
         }
         
-        highlightTextNode(log);
+        highlightTextNode(logContent);
     } else {
         // Update existing highlights - just change classes
         existingHighlights.forEach((span, index) => {
@@ -966,15 +988,27 @@ if(window.api?.onSOQLProgress) {
             rowNumTh.style.textAlign = "right";
             headerRow.appendChild(rowNumTh);
             
-            headerLabels.forEach(lbl => { const th = document.createElement("th"); th.textContent = lbl; headerRow.appendChild(th); });
+            // Add sortable column headers
+            headerLabels.forEach((lbl, idx) => { 
+                const th = document.createElement("th"); 
+                th.textContent = lbl; 
+                th.className = 'sortable';
+                th.dataset.columnIndex = idx;
+                th.addEventListener('click', () => sortTable(idx, headers[idx], lbl));
+                headerRow.appendChild(th); 
+            });
             thead.appendChild(headerRow); tableEl.appendChild(thead);
             
             const tbody = document.createElement("tbody");
             tableEl.appendChild(tbody);
-            log.appendChild(tableEl);
+            logContent.appendChild(tableEl);
             
             currentTable = tableEl;
             currentTbody = tbody;
+            
+            // Reset sort state for new table
+            currentSortColumn = null;
+            currentSortDirection = 'asc';
         }
         
         // Add new rows
@@ -1033,7 +1067,7 @@ editor.addEventListener("keydown",async e=>{
         // Check if environment is selected
         const envSelector = document.getElementById('envSelector');
         if (!envSelector.value) {
-            log.innerHTML = '';
+            logContent.innerHTML = '';
             currentResultData = null;
             document.getElementById('exportJsonBtn').style.display = 'none';
             document.getElementById('exportCsvBtn').style.display = 'none';
@@ -1088,7 +1122,7 @@ editor.addEventListener("keydown",async e=>{
         editor.setSelectionRange(blockStart, blockEnd);
         editor.focus();
 
-        log.innerHTML='';
+        logContent.innerHTML='';
         currentTable = null;
         currentTbody = null;
         currentResultData = null;
@@ -1121,7 +1155,7 @@ editor.addEventListener("keydown",async e=>{
                     errEl.style.background = '#fff3cd';
                     errEl.style.color = '#856404';
                     errEl.innerHTML = '⏹ Query was stopped';
-                    log.appendChild(errEl);
+                    logContent.appendChild(errEl);
                     
                     // If we have partial results from pagination, keep them exportable
                     if (currentTable && currentTbody && currentTbody.children.length > 0) {
@@ -1145,7 +1179,15 @@ editor.addEventListener("keydown",async e=>{
                         
                         const elapsedMs = queryStartTime ? Date.now() - queryStartTime : 0;
                         const elapsedSec = (elapsedMs / 1000).toFixed(2);
-                        document.getElementById('resultsCount').textContent = `Results: ${partialRecords.length} (partial, ${elapsedSec}s)`;
+                        
+                        // Show how many were fetched vs total expected
+                        const fetchedCount = result.fetchedCount || partialRecords.length;
+                        const totalSize = result.totalSize || 0;
+                        if (totalSize > fetchedCount) {
+                            document.getElementById('resultsCount').textContent = `Results: ${fetchedCount} of ${totalSize} (partial, ${elapsedSec}s)`;
+                        } else {
+                            document.getElementById('resultsCount').textContent = `Results: ${partialRecords.length} (partial, ${elapsedSec}s)`;
+                        }
                     }
                 } else {
                     renderResult(result);
@@ -1163,14 +1205,14 @@ editor.addEventListener("keydown",async e=>{
                     } catch(err){
                         const errEl=document.createElement("div"); errEl.className="log-line";
                         errEl.innerHTML=formatErrorMessage(err.message);
-                        log.appendChild(errEl);
+                        logContent.appendChild(errEl);
                     }
                 }
             }
         } catch(err){
             const errEl=document.createElement("div"); errEl.className="log-line";
             errEl.innerHTML=formatErrorMessage(err.message);
-            log.appendChild(errEl);
+            logContent.appendChild(errEl);
         }
         
         // Clear live timer
@@ -1183,7 +1225,7 @@ editor.addEventListener("keydown",async e=>{
         currentQueryId = null;
         document.body.style.cursor = 'default';
         editor.style.cursor = 'text';
-        log.scrollTop = 0;
+        logContent.scrollTop = 0;
     }
 });
 
@@ -1225,7 +1267,7 @@ function renderResult(result) {
         const tbody = document.createElement("tbody");
         const tr = document.createElement("tr"); const td = document.createElement("td");
         td.textContent = result.totalSize; tr.appendChild(td); tbody.appendChild(tr); tableEl.appendChild(tbody);
-        log.appendChild(tableEl);
+        logContent.appendChild(tableEl);
         document.getElementById('resultsCount').textContent = `Results: ${result.totalSize} (${elapsedSec}s)`;
         return;
     }
@@ -1233,7 +1275,7 @@ function renderResult(result) {
     if (!result.records && !Array.isArray(result)) {
         const pre = document.createElement("pre");
         pre.textContent = JSON.stringify(result, null, 2);
-        log.appendChild(pre);
+        logContent.appendChild(pre);
         document.getElementById('resultsCount').textContent = `Results: JSON Response (${elapsedSec}s)`;
         return;
     }
@@ -1243,7 +1285,7 @@ function renderResult(result) {
         const emptyEl = document.createElement("div");
         emptyEl.className = "log-line";
         emptyEl.textContent = "⚠️ No records returned.";
-        log.appendChild(emptyEl);
+        logContent.appendChild(emptyEl);
         document.getElementById('resultsCount').textContent = `Results: 0 (${elapsedSec}s)`;
         return;
     }
@@ -1253,7 +1295,7 @@ function renderResult(result) {
         const emptyEl = document.createElement("div");
         emptyEl.className = "log-line";
         emptyEl.textContent = "⚠️ No fields to display.";
-        log.appendChild(emptyEl);
+        logContent.appendChild(emptyEl);
         return;
     }
 
@@ -1269,8 +1311,20 @@ function renderResult(result) {
     rowNumTh.style.textAlign = "right";
     headerRow.appendChild(rowNumTh);
     
-    headerLabels.forEach(lbl => { const th = document.createElement("th"); th.textContent = lbl; headerRow.appendChild(th); });
+    // Add sortable column headers
+    headerLabels.forEach((lbl, idx) => { 
+        const th = document.createElement("th"); 
+        th.textContent = lbl; 
+        th.className = 'sortable';
+        th.dataset.columnIndex = idx;
+        th.addEventListener('click', () => sortTable(idx, headers[idx], lbl));
+        headerRow.appendChild(th); 
+    });
     thead.appendChild(headerRow); tableEl.appendChild(thead);
+    
+    // Reset sort state for new table
+    currentSortColumn = null;
+    currentSortDirection = 'asc';
 
     const tbody = document.createElement("tbody");
     
@@ -1301,7 +1355,7 @@ function renderResult(result) {
     });
 
     tableEl.appendChild(tbody);
-    log.appendChild(tableEl);
+    logContent.appendChild(tableEl);
     
     // Update results counter - show if pagination occurred
     const totalSize = result.totalSize || records.length;
@@ -1310,6 +1364,110 @@ function renderResult(result) {
     } else {
         document.getElementById('resultsCount').textContent = `Results: ${records.length} (${elapsedSec}s)`;
     }
+}
+
+// Sort table by column
+function sortTable(columnIndex, fieldName, displayName) {
+    if (!currentResultData) return;
+    
+    const records = currentResultData.records || currentResultData;
+    if (!records || records.length === 0) return;
+    
+    // Show sorting indicator
+    document.body.style.cursor = 'wait';
+    const resultsCount = document.getElementById('resultsCount');
+    const originalText = resultsCount.textContent;
+    resultsCount.textContent = 'Sorting...';
+    
+    // Use setTimeout to allow UI to update before heavy sorting
+    setTimeout(() => {
+        // Toggle sort direction if same column, otherwise reset to ascending
+        if (currentSortColumn === columnIndex) {
+            currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSortColumn = columnIndex;
+            currentSortDirection = 'asc';
+        }
+        
+        // Sort records
+        records.sort((a, b) => {
+        let valA = a[fieldName];
+        let valB = b[fieldName];
+        
+        // Handle nested objects (like relationships)
+        if (typeof valA === 'object' && valA !== null) {
+            valA = valA.Name || valA.name || JSON.stringify(valA);
+        }
+        if (typeof valB === 'object' && valB !== null) {
+            valB = valB.Name || valB.name || JSON.stringify(valB);
+        }
+        
+        // Handle nulls - always sort to bottom
+        if (valA === null || valA === undefined) return 1;
+        if (valB === null || valB === undefined) return -1;
+        
+        // Detect data type and compare
+        const numA = Number(valA);
+        const numB = Number(valB);
+        
+        let comparison = 0;
+        if (!isNaN(numA) && !isNaN(numB)) {
+            // Numeric comparison
+            comparison = numA - numB;
+        } else {
+            // String comparison (case-insensitive)
+            const strA = String(valA).toLowerCase();
+            const strB = String(valB).toLowerCase();
+            comparison = strA.localeCompare(strB);
+        }
+        
+        return currentSortDirection === 'asc' ? comparison : -comparison;
+    });
+    
+    // Re-render table body
+    const tbody = currentTbody;
+    if (!tbody) return;
+    
+    tbody.innerHTML = '';
+    const headers = Object.keys(records[0]).filter(h => h !== "attributes");
+    
+    records.forEach((rec, index) => {
+        const tr = document.createElement("tr");
+        
+        // Add row number cell
+        const rowNumTd = document.createElement("td");
+        rowNumTd.textContent = index + 1;
+        rowNumTd.style.textAlign = "right";
+        rowNumTd.style.color = "#666";
+        tr.appendChild(rowNumTd);
+        
+        headers.forEach(h => {
+            const td = document.createElement("td");
+            let val = rec[h];
+            if (val === null || val === undefined) td.textContent = "";
+            else if (typeof val === "object") {
+                if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
+                else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
+            } else td.textContent = String(val);
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+    
+    // Update header indicators
+    const headerRow = currentTable.querySelector('thead tr');
+    const ths = headerRow.querySelectorAll('th.sortable');
+    ths.forEach((th, idx) => {
+        th.classList.remove('sorted', 'asc', 'desc');
+        if (idx === columnIndex) {
+            th.classList.add('sorted', currentSortDirection);
+        }
+    });
+    
+    // Reset cursor and status text
+    document.body.style.cursor = 'default';
+    resultsCount.textContent = originalText;
+    }, 10);
 }
 
 // ===== AUTOCOMPLETE FUNCTIONS =====
@@ -1352,10 +1510,10 @@ async function fetchObjectFields(objectName) {
 
 // Show reminder to select environment
 function showEnvironmentReminder() {
-    const log = document.getElementById('log');
+    const logContent = document.getElementById('logContent');
     
     // Check if reminder is already displayed
-    const existingReminder = log.querySelector('.env-reminder');
+    const existingReminder = logContent.querySelector('.env-reminder');
     if (existingReminder) return;
     
     const msg = document.createElement('div');
@@ -1364,7 +1522,7 @@ function showEnvironmentReminder() {
     msg.style.color = '#856404';
     msg.style.padding = '5px';
     msg.textContent = '⚠️ Please select an environment first';
-    log.appendChild(msg);
+    logContent.appendChild(msg);
 }
 
 // Parse query context to determine what to suggest
@@ -1915,3 +2073,4 @@ document.addEventListener('DOMContentLoaded',()=>{
 </script>
 </body>
 </html>
+

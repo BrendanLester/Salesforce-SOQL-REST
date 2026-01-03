@@ -224,6 +224,7 @@ ipcMain.handle('exchange-auth-code', async (event, authCode, redirectUri) => {
 
 // Track abort controllers for each query
 const abortControllers = new Map();
+const lastProgressData = new Map(); // Store last progress update for each query
 
 // Handle SOQL execution with pagination progress
 ipcMain.handle('execute-soql', async (event, query, queryId) => {
@@ -235,13 +236,18 @@ ipcMain.handle('execute-soql', async (event, query, queryId) => {
         }
         
         const result = await salesforce.executeSOQL(query, (progress) => {
+            // Store the last progress update
+            if (queryId) {
+                lastProgressData.set(queryId, progress);
+            }
             // Send progress updates to the renderer
             event.sender.send('soql-progress', progress);
         }, abortController.signal);
         
-        // Clean up abort controller
+        // Clean up abort controller and progress data
         if (queryId) {
             abortControllers.delete(queryId);
+            lastProgressData.delete(queryId);
         }
         
         return result;
@@ -252,9 +258,15 @@ ipcMain.handle('execute-soql', async (event, query, queryId) => {
         }
         
         // Don't throw abort errors - these are expected when user stops a query
-        // Just return a special response instead
+        // Return partial data if available
         if (error.name === 'AbortError') {
-            return { aborted: true };
+            const partialData = lastProgressData.get(queryId) || {};
+            lastProgressData.delete(queryId);
+            return { 
+                aborted: true,
+                totalSize: partialData.totalSize || 0,
+                fetchedCount: partialData.fetchedCount || 0
+            };
         }
         
         // Log and throw other errors
