@@ -25,7 +25,8 @@ try {
         onSOQLProgress: (callback) => ipcRenderer.on('soql-progress', (event, progress) => callback(progress)),
         describeGlobal: () => ipcRenderer.invoke('describe-global'),
         describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName),
-        openExternal: (url) => ipcRenderer.invoke('open-external', url)
+        openExternal: (url) => ipcRenderer.invoke('open-external', url),
+        openResultWindow: (data) => ipcRenderer.invoke('open-result-window', data)
     };
 
     // Load CodeMirror editor setup
@@ -156,10 +157,10 @@ tr:hover { background:#fffae6; }
 <div id="bottom" style="background:#fff; display:flex; flex-direction:column; position:relative;">
     <div id="results-header">
         <span id="resultsCount" style="font-size:14px; font-family:monospace; color:#666; margin-right:auto;"></span>
+        <button id="copyResultsBtn" tabindex="-1">📋 Copy</button>
         <button id="stopQueryBtn" onclick="stopQuery()">⏹ Stop Query</button>
         <button id="exportJsonBtn" onclick="exportToJSON()" tabindex="-1" style="display:none;">📄 Export JSON</button>
         <button id="exportCsvBtn" onclick="exportToCSV()" tabindex="-1" style="display:none;">📊 Export CSV</button>
-        <button id="copyResultsBtn" tabindex="-1">📋 Copy Results</button>
     </div>
     <div id="log" tabindex="0">
         <div id="logContent">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
@@ -631,7 +632,19 @@ function formatErrorMessage(errorMessage) {
 }
 
 // Copy button
-document.getElementById('copyResultsBtn').addEventListener('click',()=>{ if(!log.innerText) return; navigator.clipboard.writeText(log.innerText).catch(err=>alert('❌ Failed to copy results')); });
+document.getElementById('copyResultsBtn').addEventListener('click',()=>{ 
+    if(!log.innerText) return; 
+    const btn = document.getElementById('copyResultsBtn');
+    navigator.clipboard.writeText(log.innerText)
+        .then(() => {
+            const originalText = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 2000);
+        })
+        .catch(err=>alert('❌ Failed to copy results')); 
+});
 
 // Ctrl+A in log - select all results content
 log.addEventListener('keydown',e=>{ 
@@ -891,6 +904,76 @@ async function stopQuery() {
     }
 }
 
+// Helper to get object type from record
+function getObjectTypeFromRecord(rec) {
+    if (rec.attributes && rec.attributes.type) {
+        return rec.attributes.type;
+    }
+    return null;
+}
+
+// Add ID click behavior to a cell
+function makeIdClickable(td, objectType, idValue) {
+    td.style.color = '#0066cc';
+    td.style.cursor = 'pointer';
+    td.style.textDecoration = 'underline';
+    td.style.userSelect = 'text';
+    td.title = 'Click to view, Ctrl+Click for Salesforce, or select to copy';
+    td.addEventListener('click', (e) => handleIdClick(e, objectType, idValue));
+}
+
+// Handle ID cell click
+function handleIdClick(event, objectType, idValue) {
+    if (!objectType || !idValue) return;
+    
+    // Check if user is selecting text - if so, don't trigger navigation
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) {
+        return;
+    }
+    
+    if (event.ctrlKey || event.metaKey) {
+        // Ctrl+click: Open in Salesforce
+        const currentConfig = document.getElementById('envSelector').value;
+        if (!currentConfig) {
+            alert('No environment selected');
+            return;
+        }
+        // Try to construct Salesforce URL from current connection
+        window.api.getCurrentConfig().then(config => {
+            if (config && config.instanceUrl) {
+                const url = `${config.instanceUrl}/${idValue}`;
+                window.api.openExternal(url);
+            } else {
+                alert('Cannot determine Salesforce URL');
+            }
+        }).catch(err => {
+            console.error('Error getting config:', err);
+            alert('Cannot open Salesforce URL');
+        });
+    } else {
+        // Plain click: Execute REST API query in this app
+        executeRestForId(objectType, idValue);
+    }
+}
+
+// Execute REST API query for an ID
+// Execute REST API query for an ID
+async function executeRestForId(objectType, idValue) {
+    try {
+        const path = `${objectType}/${idValue}`;
+        const res = await window.api.executeREST(path);
+        
+        // Open result in new window
+        await window.api.openResultWindow(res);
+    } catch (err) {
+        // Show error in new window
+        await window.api.openResultWindow({
+            error: err.message || 'Failed to fetch record'
+        });
+    }
+}
+
 // Listen for pagination progress events
 if(window.api?.onSOQLProgress) {
     window.api.onSOQLProgress((progress) => {
@@ -1002,7 +1085,16 @@ if(window.api?.onSOQLProgress) {
                 else if (typeof val === "object") {
                     if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
                     else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
-                } else td.textContent = String(val);
+                } else {
+                    td.textContent = String(val);
+                    // Make Id field clickable
+                    if (h === 'Id' && val) {
+                        const objectType = getObjectTypeFromRecord(rec);
+                        if (objectType) {
+                            makeIdClickable(td, objectType, val);
+                        }
+                    }
+                }
                 tr.appendChild(td);
             });
             currentTbody.appendChild(tr);
@@ -1355,7 +1447,16 @@ function renderResult(result) {
             else if (typeof val === "object") {
                 if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
                 else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
-            } else td.textContent = String(val);
+            } else {
+                td.textContent = String(val);
+                // Make Id field clickable
+                if (h === 'Id' && val) {
+                    const objectType = getObjectTypeFromRecord(rec);
+                    if (objectType) {
+                        makeIdClickable(td, objectType, val);
+                    }
+                }
+            }
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -1475,7 +1576,16 @@ function sortTable(columnIndex, fieldName, displayName) {
                 else if (typeof val === "object") {
                     if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
                     else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
-                } else td.textContent = String(val);
+                } else {
+                    td.textContent = String(val);
+                    // Make Id field clickable
+                    if (h === 'Id' && val) {
+                        const objectType = getObjectTypeFromRecord(rec);
+                        if (objectType) {
+                            makeIdClickable(td, objectType, val);
+                        }
+                    }
+                }
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
@@ -1553,7 +1663,16 @@ function applyFilters() {
             else if (typeof val === "object") {
                 if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
                 else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
-            } else td.textContent = String(val);
+            } else {
+                td.textContent = String(val);
+                // Make Id field clickable
+                if (h === 'Id' && val) {
+                    const objectType = getObjectTypeFromRecord(rec);
+                    if (objectType) {
+                        makeIdClickable(td, objectType, val);
+                    }
+                }
+            }
             tr.appendChild(td);
         });
         tbody.appendChild(tr);

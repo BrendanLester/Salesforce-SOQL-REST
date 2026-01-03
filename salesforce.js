@@ -412,10 +412,12 @@ async function executeREST(path) {
 // Get current config info for debugging
 function getCurrentConfig() {
     const hasToken = currentConfigFile ? !!tokenCache[currentConfigFile] : false;
+    const token = currentConfigFile ? tokenCache[currentConfigFile] : null;
     return {
         currentConfigFile,
         hasConfigData: !!configData,
-        hasToken
+        hasToken,
+        instanceUrl: token?.instance_url || null
     };
 }
 

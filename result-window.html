@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>REST API Result</title>
+<style>
+body { margin:0; padding:20px; font-family:sans-serif; background:#f5f5f5; }
+.container { max-width:1200px; margin:0 auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:2px solid #0066cc; padding-bottom:10px; }
+h1 { margin:0; color:#333; font-size:18px; }
+.action-btn { padding:4px 8px; font-size:12px; cursor:pointer; }
+.action-btn.sf-link { background:#0066cc; color:#fff; }
+pre { background:#f8f8f8; padding:15px; border-radius:4px; overflow:auto; font-family:monospace; font-size:13px; line-height:1.5; border:1px solid #ddd; }
+.error { background:#f8d7da; color:#721c24; padding:15px; border-radius:4px; border:1px solid #f5c6cb; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>REST API Result</h1>
+        <div style="display:flex; gap:8px;">
+            <button id="copyBtn" class="action-btn" style="display:none;">📋 Copy</button>
+            <button id="exportBtn" class="action-btn" style="display:none;">📄 Export JSON</button>
+            <button id="openInSF" class="action-btn sf-link" style="display:none;">Open in Salesforce</button>
+        </div>
+    </div>
+    <div id="content">Loading...</div>
+</div>
+
+<script>
+const { ipcRenderer } = require('electron');
+
+// Close window on Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        window.close();
+    }
+});
+
+// Request the result data from main process
+ipcRenderer.invoke('get-result-data').then(resultData => {
+    const contentDiv = document.getElementById('content');
+    const openInSFBtn = document.getElementById('openInSF');
+    const copyBtn = document.getElementById('copyBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    
+    if (!resultData) {
+        contentDiv.innerHTML = '<div class="error">No data available</div>';
+        return;
+    }
+    
+    if (resultData.error) {
+        contentDiv.innerHTML = `<div class="error">${resultData.error}</div>`;
+    } else {
+        const pre = document.createElement('pre');
+        const jsonText = JSON.stringify(resultData, null, 2);
+        pre.textContent = jsonText;
+        contentDiv.innerHTML = '';
+        contentDiv.appendChild(pre);
+        
+        // Show copy button
+        copyBtn.style.display = 'block';
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(jsonText);
+                const originalText = copyBtn.textContent;
+                copyBtn.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    copyBtn.textContent = originalText;
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy to clipboard');
+            }
+        });
+        
+        // Show export button
+        exportBtn.style.display = 'block';
+        exportBtn.addEventListener('click', () => {
+            const blob = new Blob([jsonText], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const now = new Date();
+            const timestamp = now.getFullYear() + '-' + 
+                String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                String(now.getDate()).padStart(2, '0') + 'T' + 
+                String(now.getHours()).padStart(2, '0') + '-' + 
+                String(now.getMinutes()).padStart(2, '0') + '-' + 
+                String(now.getSeconds()).padStart(2, '0');
+            const recordId = resultData.Id || 'record';
+            a.download = `${recordId}_${timestamp}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+        
+        // Update title with object type if available
+        if (resultData.attributes && resultData.attributes.type) {
+            document.title = `${resultData.attributes.type} - ${resultData.Id || 'Record'}`;
+            document.querySelector('h1').textContent = `${resultData.attributes.type} Record`;
+        }
+        
+        // Show "Open in Salesforce" button if we have an ID
+        if (resultData.Id) {
+            openInSFBtn.style.display = 'block';
+            openInSFBtn.addEventListener('click', async () => {
+                try {
+                    const config = await ipcRenderer.invoke('get-current-config');
+                    if (config && config.instanceUrl) {
+                        const url = `${config.instanceUrl}/${resultData.Id}`;
+                        await ipcRenderer.invoke('open-external', url);
+                    } else {
+                        alert('Cannot determine Salesforce URL');
+                    }
+                } catch (err) {
+                    console.error('Error opening Salesforce URL:', err);
+                    alert('Failed to open Salesforce URL');
+                }
+            });
+        }
+    }
+}).catch(err => {
+    document.getElementById('content').innerHTML = `<div class="error">Error loading data: ${err.message}</div>`;
+});
+</script>
+</body>
+</html>

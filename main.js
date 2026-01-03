@@ -327,6 +327,67 @@ ipcMain.handle('open-external', async (event, url) => {
     }
 });
 
+// Open a new window with REST API result
+ipcMain.handle('open-result-window', async (event, data) => {
+    try {
+        const resultWindow = new BrowserWindow({
+            width: 800,
+            height: 600,
+            webPreferences: {
+                contextIsolation: false,
+                nodeIntegration: true,
+                enableRemoteModule: false,
+                sandbox: false
+            }
+        });
+        
+        // Remove menu from result window
+        resultWindow.setMenu(null);
+        
+        // Store the data temporarily with the window ID
+        const windowId = resultWindow.id;
+        if (!global.resultWindowData) {
+            global.resultWindowData = {};
+        }
+        global.resultWindowData[windowId] = data;
+        
+        // Clean up when window is closed
+        resultWindow.on('closed', () => {
+            if (global.resultWindowData) {
+                delete global.resultWindowData[windowId];
+            }
+        });
+        
+        resultWindow.loadFile('result-window.html');
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Error opening result window:', error);
+        throw error;
+    }
+});
+
+// Get result data for a specific window
+ipcMain.handle('get-result-data', async (event) => {
+    try {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        if (!window) return null;
+        
+        const windowId = window.id;
+        const data = global.resultWindowData?.[windowId];
+        
+        // Clear the data after retrieving it
+        if (global.resultWindowData && windowId in global.resultWindowData) {
+            delete global.resultWindowData[windowId];
+        }
+        
+        return data || null;
+    } catch (error) {
+        console.error('Error getting result data:', error);
+        return null;
+    }
+});
+
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
