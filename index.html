@@ -211,7 +211,38 @@ function toggleHelp() {
 function exportToJSON() {
     if (!currentResultData) return;
     
-    const jsonStr = JSON.stringify(currentResultData, null, 2);
+    // Get filtered records
+    let dataToExport = currentResultData;
+    const records = currentResultData.records || currentResultData;
+    
+    // Apply filters if any are active
+    const activeFilters = Object.keys(columnFilters).filter(key => columnFilters[key]);
+    if (activeFilters.length > 0 && Array.isArray(records)) {
+        const filteredRecords = records.filter(record => {
+            return activeFilters.every(fieldName => {
+                const filterValue = columnFilters[fieldName];
+                let cellValue = record[fieldName];
+                
+                if (cellValue === null || cellValue === undefined) cellValue = '';
+                if (typeof cellValue === 'object') {
+                    if (cellValue.Name || cellValue.name) cellValue = cellValue.Name || cellValue.name;
+                    else cellValue = JSON.stringify(cellValue);
+                }
+                cellValue = String(cellValue).toLowerCase();
+                
+                return cellValue.includes(filterValue);
+            });
+        });
+        
+        // Preserve structure for SOQL results
+        if (currentResultData.records) {
+            dataToExport = { ...currentResultData, records: filteredRecords, totalSize: filteredRecords.length };
+        } else {
+            dataToExport = filteredRecords;
+        }
+    }
+    
+    const jsonStr = JSON.stringify(dataToExport, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -232,8 +263,33 @@ function exportToJSON() {
 function exportToCSV() {
     if (!currentResultData) return;
     
-    const records = currentResultData.records || currentResultData;
+    let records = currentResultData.records || currentResultData;
     if (!records || records.length === 0) return;
+    
+    // Apply filters if any are active
+    const activeFilters = Object.keys(columnFilters).filter(key => columnFilters[key]);
+    if (activeFilters.length > 0) {
+        records = records.filter(record => {
+            return activeFilters.every(fieldName => {
+                const filterValue = columnFilters[fieldName];
+                let cellValue = record[fieldName];
+                
+                if (cellValue === null || cellValue === undefined) cellValue = '';
+                if (typeof cellValue === 'object') {
+                    if (cellValue.Name || cellValue.name) cellValue = cellValue.Name || cellValue.name;
+                    else cellValue = JSON.stringify(cellValue);
+                }
+                cellValue = String(cellValue).toLowerCase();
+                
+                return cellValue.includes(filterValue);
+            });
+        });
+    }
+    
+    if (records.length === 0) {
+        alert('No records to export after filtering');
+        return;
+    }
     
     // Get headers (excluding attributes)
     const headers = Object.keys(records[0]).filter(h => h !== 'attributes');
