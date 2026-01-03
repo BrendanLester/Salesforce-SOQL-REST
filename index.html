@@ -44,6 +44,16 @@ tr:hover { background:#fffae6; }
 .autocomplete-relationship { color:#0066cc; font-weight:bold; }
 #autocompleteToggle { margin-left:20px; display:flex; align-items:center; gap:4px; font-size:12px; color:#666; }
 #autocompleteToggle input[type="checkbox"] { cursor:pointer; }
+
+#helpModal { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:10000; display:none; align-items:center; justify-content:center; }
+#helpContent { background:#fff; border-radius:8px; padding:20px; max-width:400px; box-shadow:0 4px 16px rgba(0,0,0,0.3); }
+#helpContent h3 { margin:0 0 15px 0; color:#333; border-bottom:2px solid #0066cc; padding-bottom:8px; }
+#helpContent table { width:100%; border-collapse:collapse; font-family:monospace; font-size:13px; }
+#helpContent td { padding:6px 8px; border-bottom:1px solid #eee; }
+#helpContent td:first-child { font-weight:bold; color:#0066cc; white-space:nowrap; }
+#helpContent td:last-child { color:#666; }
+#helpClose { float:right; background:#0066cc; color:white; border:none; padding:4px 12px; border-radius:4px; cursor:pointer; font-size:12px; margin-top:10px; }
+#helpClose:hover { background:#0052a3; }
 </style>
 </head>
 <body>
@@ -61,7 +71,31 @@ tr:hover { background:#fffae6; }
         Autocomplete
     </label>
     
-    <span style="margin-left:auto; font-size:12px; color:#666;">Press Ctrl+E on a query block to execute SOQL or REST</span>
+    <div style="margin-left:auto; font-size:12px; color:#666; display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
+        <span>Press Ctrl+E on a query block to execute SOQL or REST</span>
+        <span onclick="toggleHelp()" style="cursor:pointer; text-decoration:underline; font-size:11px;" title="Keyboard Shortcuts">Help</span>
+    </div>
+</div>
+
+<div id="helpModal" onclick="if(event.target===this) toggleHelp()">
+    <div id="helpContent">
+        <h3>⌨️ Keyboard Shortcuts</h3>
+        <table>
+            <tr><td>Ctrl+E</td><td>Execute query block</td></tr>
+            <tr><td>Ctrl+F</td><td>Find in editor/results</td></tr>
+            <tr><td>Ctrl+A</td><td>Select all (in results)</td></tr>
+            <tr><td>Tab / Enter</td><td>Select autocomplete item</td></tr>
+            <tr><td>, (comma)</td><td>Select item + add comma</td></tr>
+            <tr><td>. (period)</td><td>Select relation + traverse</td></tr>
+            <tr><td>↑ ↓</td><td>Navigate autocomplete</td></tr>
+            <tr><td>PgUp / PgDn</td><td>Jump 5 items</td></tr>
+            <tr><td>Escape</td><td>Close popup/search</td></tr>
+        </table>
+        <div style="margin-top:15px; padding-top:10px; border-top:1px solid #eee; font-size:12px; color:#666; text-align:center;">
+            Learn more at <a href="#" onclick="event.preventDefault(); window.api.openExternal('https://getplayforce.com/')" style="color:#0066cc;">getplayforce.com</a>
+        </div>
+        <button id="helpClose" onclick="toggleHelp()">Close</button>
+    </div>
 </div>
 
 <div id="top" style="background:#f0f0f0; position:relative;">
@@ -115,6 +149,16 @@ function toggleAutocomplete() {
     localStorage.setItem('autocompleteEnabled', autocompleteEnabled);
     if (!autocompleteEnabled) {
         hideAutocomplete();
+    }
+}
+
+// Toggle help modal
+function toggleHelp() {
+    const modal = document.getElementById('helpModal');
+    if (modal.style.display === 'flex') {
+        modal.style.display = 'none';
+    } else {
+        modal.style.display = 'flex';
     }
 }
 
@@ -548,14 +592,18 @@ document.addEventListener('keydown', e => {
     if(e.key === 'Escape') {
         const editorSearch = document.getElementById('editorSearch');
         const logSearch = document.getElementById('logSearch');
+        const helpModal = document.getElementById('helpModal');
         
-        // Priority 1: Close search boxes if open
-        if(editorSearch.style.display === 'block') {
+        // Priority 1: Close help modal if open
+        if(helpModal.style.display === 'flex') {
+            toggleHelp();
+        // Priority 2: Close search boxes if open
+        } else if(editorSearch.style.display === 'block') {
             closeSearch('editor');
         } else if(logSearch.style.display === 'block') {
             closeSearch('log');
         } else if(currentQueryId) {
-            // Priority 2: Stop running query if no search boxes are open
+            // Priority 3: Stop running query if no popups are open
             stopQuery();
         }
     }

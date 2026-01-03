@@ -27,7 +27,10 @@ try {
         
         // Metadata operations
         describeGlobal: () => ipcRenderer.invoke('describe-global'),
-        describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName)
+        describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName),
+        
+        // Open external URLs
+        openExternal: (url) => ipcRenderer.invoke('open-external', url)
     });
 
     console.log('API exposed successfully via contextBridge - all operations via IPC');

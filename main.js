@@ -310,6 +310,16 @@ ipcMain.handle('describe-object', async (event, objectName) => {
     }
 });
 
+// Open external URL in system browser
+ipcMain.handle('open-external', async (event, url) => {
+    try {
+        await shell.openExternal(url);
+    } catch (error) {
+        console.error('Error opening external URL:', error);
+        throw error;
+    }
+});
+
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
