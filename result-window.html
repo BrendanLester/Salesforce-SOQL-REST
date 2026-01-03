@@ -10,7 +10,8 @@ body { margin:0; padding:20px; font-family:sans-serif; background:#f5f5f5; }
 h1 { margin:0; color:#333; font-size:18px; }
 .action-btn { padding:4px 8px; font-size:12px; cursor:pointer; }
 .action-btn.sf-link { background:#0066cc; color:#fff; }
-pre { background:#f8f8f8; padding:15px; border-radius:4px; overflow:auto; font-family:monospace; font-size:13px; line-height:1.5; border:1px solid #ddd; }
+pre { background:#f8f8f8; padding:15px; border-radius:4px; overflow:auto; font-family:monospace; font-size:13px; line-height:1.5; border:1px solid #ddd; cursor:text; user-select:text; }
+pre:focus { outline:none; }
 .error { background:#f8d7da; color:#721c24; padding:15px; border-radius:4px; border:1px solid #f5c6cb; }
 </style>
 </head>
@@ -55,8 +56,24 @@ ipcRenderer.invoke('get-result-data').then(resultData => {
         const pre = document.createElement('pre');
         const jsonText = JSON.stringify(resultData, null, 2);
         pre.textContent = jsonText;
+        pre.tabIndex = 0; // Make focusable
         contentDiv.innerHTML = '';
         contentDiv.appendChild(pre);
+        
+        // Handle Ctrl+A to select only JSON text
+        pre.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+                e.preventDefault();
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(pre);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        });
+        
+        // Auto-focus the pre element so user can immediately Ctrl+A
+        setTimeout(() => pre.focus(), 100);
         
         // Show copy button
         copyBtn.style.display = 'block';
