@@ -20,10 +20,16 @@ body { margin:0; padding:0; font-family:sans-serif; background:#f5f5f5; overflow
 h1 { margin:0; color:#333; font-size:18px; }
 .action-btn { padding:4px 8px; font-size:12px; cursor:pointer; }
 .action-btn.sf-link { background:#0066cc; color:#fff; }
-#content { flex:1; overflow:auto; padding:20px; }
+#content { flex:1; overflow:auto; padding:20px; position:relative; }
 pre { background:#f8f8f8; padding:15px; border-radius:4px; overflow:auto; font-family:monospace; font-size:13px; line-height:1.5; border:1px solid #ddd; cursor:text; user-select:text; max-height:none; }
 pre:focus { outline:none; }
 .error { background:#f8d7da; color:#721c24; padding:15px; border-radius:4px; border:1px solid #f5c6cb; }
+.search-box { position:absolute; top:10px; right:10px; background:#fff; border:2px solid #0066cc; border-radius:4px; padding:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:1000; display:none; }
+.search-box input { border:1px solid #ccc; padding:4px; margin-right:4px; font-size:12px; }
+.search-box button { background:#0066cc; color:white; border:none; padding:4px 8px; cursor:pointer; font-size:12px; }
+.search-box button:hover { background:#0052a3; }
+.search-highlight { background:#ffff00; color:#000; }
+.search-current { background:#ff6600; color:#fff; }
 </style>
 </head>
 <body>
@@ -44,10 +50,197 @@ pre:focus { outline:none; }
         </div>
     </div>
     <div id="content">Loading...</div>
+    <div id="searchBox" class="search-box">
+        <input type="text" placeholder="Search..." id="searchInput">
+        <span id="matchCount" style="font-size:11px; color:#666; margin-right:4px;"></span>
+        <button onclick="findNext()" title="Find Next (Enter)">↓</button>
+        <button onclick="findPrev()" title="Find Previous (Shift+Enter)">↑</button>
+        <button onclick="closeSearch()" title="Close (Escape)">✕</button>
+    </div>
 </div>
 
 <script>
 const { ipcRenderer } = require('electron');
+
+// Search functionality
+let currentMatches = [];
+let currentMatchIndex = -1;
+let currentSearchText = '';
+
+function openSearch() {
+    const searchBox = document.getElementById('searchBox');
+    const input = document.getElementById('searchInput');
+    searchBox.style.display = 'block';
+    input.focus();
+}
+
+function closeSearch() {
+    const searchBox = document.getElementById('searchBox');
+    searchBox.style.display = 'none';
+    clearHighlights();
+}
+
+function clearHighlights() {
+    const content = document.getElementById('content');
+    const highlights = content.querySelectorAll('.search-highlight, .search-current');
+    highlights.forEach(span => {
+        const parent = span.parentNode;
+        parent.replaceChild(document.createTextNode(span.textContent), span);
+        parent.normalize();
+    });
+    document.getElementById('matchCount').textContent = '';
+    currentMatches = [];
+    currentMatchIndex = -1;
+}
+
+function findInContent(searchText, direction = 1) {
+    if(!searchText) return;
+    
+    const content = document.getElementById('content');
+    
+    // Only rebuild matches if search text changed
+    if(currentSearchText !== searchText) {
+        clearHighlights();
+        currentSearchText = searchText;
+        currentMatches = [];
+        currentMatchIndex = 0;
+        
+        highlightMatches(searchText, 0);
+    } else {
+        // Navigate through existing matches
+        currentMatchIndex += direction;
+        if(currentMatchIndex >= currentMatches.length) currentMatchIndex = 0;
+        if(currentMatchIndex < 0) currentMatchIndex = currentMatches.length - 1;
+        
+        // Update highlight classes
+        const highlights = content.querySelectorAll('.search-highlight, .search-current');
+        highlights.forEach((span, index) => {
+            span.className = index === currentMatchIndex ? 'search-current' : 'search-highlight';
+            if(index === currentMatchIndex) {
+                span.id = 'current-search-match';
+            } else {
+                span.removeAttribute('id');
+            }
+        });
+    }
+    
+    // Update match counter
+    const counter = document.getElementById('matchCount');
+    if(currentMatches.length > 0) {
+        counter.textContent = `${currentMatchIndex + 1} of ${currentMatches.length}`;
+    }
+    
+    // Scroll to current match
+    setTimeout(() => {
+        const currentMatch = document.getElementById('current-search-match');
+        if(currentMatch) {
+            currentMatch.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        }
+    }, 10);
+}
+
+function highlightMatches(searchText, currentIndex) {
+    const content = document.getElementById('content');
+    const regex = new RegExp(escapeRegex(searchText), 'gi');
+    let matchIndex = 0;
+    
+    function highlightTextNode(node) {
+        if(node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent;
+            const matches = [];
+            let match;
+            regex.lastIndex = 0;
+            while((match = regex.exec(text)) !== null) {
+                matches.push({ start: match.index, end: match.index + match[0].length, text: match[0] });
+            }
+            
+            if(matches.length > 0) {
+                const fragment = document.createDocumentFragment();
+                let lastEnd = 0;
+                
+                matches.forEach(m => {
+                    if(m.start > lastEnd) {
+                        fragment.appendChild(document.createTextNode(text.substring(lastEnd, m.start)));
+                    }
+                    
+                    const span = document.createElement('span');
+                    span.className = matchIndex === currentIndex ? 'search-current' : 'search-highlight';
+                    if(matchIndex === currentIndex) {
+                        span.id = 'current-search-match';
+                    }
+                    span.textContent = m.text;
+                    fragment.appendChild(span);
+                    
+                    currentMatches.push(matchIndex);
+                    lastEnd = m.end;
+                    matchIndex++;
+                });
+                
+                if(lastEnd < text.length) {
+                    fragment.appendChild(document.createTextNode(text.substring(lastEnd)));
+                }
+                
+                node.parentNode.replaceChild(fragment, node);
+            }
+        } else if(node.nodeType === Node.ELEMENT_NODE) {
+            if(!node.classList.contains('search-highlight') && !node.classList.contains('search-current')) {
+                Array.from(node.childNodes).forEach(child => highlightTextNode(child));
+            }
+        }
+    }
+    
+    highlightTextNode(content);
+}
+
+function escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findNext() {
+    const input = document.getElementById('searchInput');
+    const searchText = input.value.trim();
+    if(searchText) findInContent(searchText, 1);
+}
+
+function findPrev() {
+    const input = document.getElementById('searchInput');
+    const searchText = input.value.trim();
+    if(searchText) findInContent(searchText, -1);
+}
+
+// Search input handlers
+document.getElementById('searchInput').addEventListener('keydown', e => {
+    if(e.key === 'Enter') {
+        e.preventDefault();
+        if(e.shiftKey) {
+            findPrev();
+        } else {
+            findNext();
+        }
+    } else if(e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSearch();
+    }
+});
+
+document.getElementById('searchInput').addEventListener('input', e => {
+    const searchText = e.target.value.trim();
+    if(searchText) {
+        currentSearchText = '';
+        findInContent(searchText, 1);
+    } else {
+        clearHighlights();
+    }
+});
+
+// Ctrl+F handler
+document.addEventListener('keydown', e => {
+    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        openSearch();
+    }
+});
 
 // Close all popups button handler (in title bar)
 const closeAllBtn = document.getElementById('closeAllBtn');
@@ -62,10 +255,17 @@ if (closeAllBtn) {
     });
 }
 
-// Close window on Escape key
+// Close window on Escape key (only if search box is not open)
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        window.close();
+        const searchBox = document.getElementById('searchBox');
+        if (searchBox && searchBox.style.display === 'block') {
+            // If search is open, close it first
+            closeSearch();
+        } else {
+            // If search is closed, close the window
+            window.close();
+        }
     }
 });
 
