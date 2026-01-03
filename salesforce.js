@@ -457,6 +457,76 @@ async function tryAuthenticate() {
     }
 }
 
+// Get list of all available SObjects
+async function describeGlobal() {
+    console.log('describeGlobal() called');
+    const config = loadConfig();
+    if (!config) {
+        throw new Error('No config selected. Please select an environment first.');
+    }
+    const apiVersion = config.apiVersion;
+
+    return await withTokenRetry(async (token, instanceUrl) => {
+        if (!token || !instanceUrl) {
+            ({ token, instanceUrl } = await getAccessToken());
+        }
+
+        const url = `${instanceUrl}/services/data/${apiVersion}/sobjects/`;
+        console.log('Making describeGlobal request to:', url);
+
+        const res = await fetch(url, {
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            }
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Salesforce describe global error: ${text}`);
+        }
+
+        const result = await res.json();
+        console.log('describeGlobal success, returned', result.sobjects?.length || 0, 'objects');
+        return result;
+    });
+}
+
+// Get field metadata for a specific SObject
+async function describeObject(objectName) {
+    console.log('describeObject() called for:', objectName);
+    const config = loadConfig();
+    if (!config) {
+        throw new Error('No config selected. Please select an environment first.');
+    }
+    const apiVersion = config.apiVersion;
+
+    return await withTokenRetry(async (token, instanceUrl) => {
+        if (!token || !instanceUrl) {
+            ({ token, instanceUrl } = await getAccessToken());
+        }
+
+        const url = `${instanceUrl}/services/data/${apiVersion}/sobjects/${objectName}/describe`;
+        console.log('Making describeObject request to:', url);
+
+        const res = await fetch(url, {
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            }
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Salesforce describe object error: ${text}`);
+        }
+
+        const result = await res.json();
+        console.log('describeObject success, returned', result.fields?.length || 0, 'fields for', objectName);
+        return result;
+    });
+}
+
 module.exports = {
     executeSOQL,
     executeREST,
@@ -468,7 +538,9 @@ module.exports = {
     getCurrentConfig,
     requiresOAuth,
     tryAuthenticate,
-    hasValidToken
+    hasValidToken,
+    describeGlobal,
+    describeObject
 };
 
 console.log('salesforce.js loaded successfully');

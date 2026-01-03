@@ -34,6 +34,15 @@ tr:hover { background:#fffae6; }
 .search-box button:hover { background:#0052a3; }
 .search-highlight { background:#ffff00; color:#000; }
 .search-current { background:#ff6600; color:#fff; }
+
+#autocomplete { position:fixed; background:#fff; border:1px solid #0066cc; border-radius:4px; box-shadow:0 4px 8px rgba(0,0,0,0.2); max-height:200px; overflow-y:auto; z-index:9999; display:none; min-width:150px; }
+.autocomplete-item { padding:6px 12px; cursor:pointer; font-family:monospace; font-size:13px; }
+.autocomplete-item:hover { background:#e6f2ff; }
+.autocomplete-item.selected { background:#0066cc; color:white; }
+.autocomplete-hint { font-size:11px; color:#888; margin-left:8px; }
+.autocomplete-relationship { color:#0066cc; font-weight:bold; }
+#autocompleteToggle { margin-left:20px; display:flex; align-items:center; gap:4px; font-size:12px; color:#666; }
+#autocompleteToggle input[type="checkbox"] { cursor:pointer; }
 </style>
 </head>
 <body>
@@ -46,11 +55,17 @@ tr:hover { background:#fffae6; }
         <option value="">Select Environment</option>
     </select>
     
+    <label id="autocompleteToggle">
+        <input type="checkbox" id="autocompleteEnabled" checked onchange="toggleAutocomplete()">
+        Autocomplete
+    </label>
+    
     <span style="margin-left:auto; font-size:12px; color:#666;">Press Ctrl+E on a query block to execute SOQL or REST</span>
 </div>
 
 <div id="top" style="background:#f0f0f0; position:relative;">
-<textarea id="editor" placeholder="Type SOQL queries or REST paths here..."></textarea>
+<textarea id="editor" placeholder="Type SOQL queries or REST paths here..." spellcheck="false"></textarea>
+<div id="autocomplete"></div>
 <div id="editorSearch" class="search-box">
     <input type="text" placeholder="Search..." id="editorSearchInput">
     <span id="editorMatchCount" style="font-size:11px; color:#666; margin-right:4px;"></span>
@@ -62,9 +77,9 @@ tr:hover { background:#fffae6; }
 <div id="splitter"></div>
 <div id="bottom" style="background:#fff; display:flex; flex-direction:column; position:relative;">
     <div id="results-header">
-        <span id="resultsCount" style="font-size:12px; color:#666; margin-right:auto;"></span>
+        <span id="resultsCount" style="font-size:14px; font-family:monospace; color:#666; margin-right:auto;"></span>
         <button id="stopQueryBtn" onclick="stopQuery()">⏹ Stop Query</button>
-        <button id="copyResultsBtn">📋 Copy Results</button>
+        <button id="copyResultsBtn" tabindex="-1">📋 Copy Results</button>
     </div>
     <div id="log" tabindex="0">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
     <div id="logSearch" class="search-box">
@@ -79,6 +94,23 @@ tr:hover { background:#fffae6; }
 <script>
 // Global variable to store the actual OAuth redirect URI
 let currentRedirectUri = null;
+
+// Autocomplete state
+let sobjectsCache = null; // Cached list of SObjects
+let objectFieldsCache = {}; // Cached field metadata per object: { objectName: fieldsArray }
+let autocompleteVisible = false;
+let autocompleteSelectedIndex = -1;
+let autocompleteItems = [];
+let autocompleteEnabled = localStorage.getItem('autocompleteEnabled') !== 'false'; // Default true
+
+// Toggle autocomplete feature
+function toggleAutocomplete() {
+    autocompleteEnabled = document.getElementById('autocompleteEnabled').checked;
+    localStorage.setItem('autocompleteEnabled', autocompleteEnabled);
+    if (!autocompleteEnabled) {
+        hideAutocomplete();
+    }
+}
 
 // Highlight SOQL keywords
 function highlightSOQL(query) {
@@ -104,6 +136,10 @@ async function changeEnvironment() {
     try {
         const success = await window.api.setConfigFile(sel.value);
         if(success){
+            // Clear autocomplete caches when switching environments
+            sobjectsCache = null;
+            objectFieldsCache = {};
+            
             log.innerHTML='';
             const msg = document.createElement('div');
             msg.className='log-line';
@@ -114,6 +150,9 @@ async function changeEnvironment() {
             
             // Auto-authenticate based on grant type
             await autoAuthenticate();
+            
+            // Eagerly fetch object list for autocomplete
+            fetchSObjects().catch(err => console.log('Could not pre-fetch objects:', err.message));
         } else alert('Failed to switch environment');
     } catch(err){ alert(err.message); }
 }
@@ -316,6 +355,90 @@ document.addEventListener("mouseup", () => {
 
 const editor = document.getElementById("editor");
 const log = document.getElementById("log");
+
+// Format Salesforce error messages for better readability
+function formatErrorMessage(errorMessage) {
+    // Try to extract REST API error details
+    const restErrorMatch = errorMessage.match(/REST API error: \[(.*?)\](?:\s*URL:\s*(.*))?$/s);
+    if (restErrorMatch) {
+        try {
+            const errors = JSON.parse('[' + restErrorMatch[1] + ']');
+            if (errors && errors.length > 0) {
+                const error = errors[0];
+                let formatted = '❌ <strong>REST API Error</strong>';
+                
+                // Show error code and message
+                if (error.errorCode) {
+                    formatted += '<br><strong>' + error.errorCode + ':</strong> ';
+                } else {
+                    formatted += '<br>';
+                }
+                
+                if (error.message) {
+                    formatted += error.message;
+                }
+                
+                // Show URL if present
+                if (restErrorMatch[2]) {
+                    formatted += '<br><span style="color:#666;font-size:12px">URL: ' + restErrorMatch[2].trim() + '</span>';
+                }
+                
+                return formatted;
+            }
+        } catch (e) {
+            // If parsing fails, fall through to default handling
+        }
+    }
+    
+    // Try to extract Salesforce SOQL error details
+    const soqlErrorMatch = errorMessage.match(/Salesforce SOQL error: \[(.*)\]$/s);
+    if (soqlErrorMatch) {
+        try {
+            const errors = JSON.parse('[' + soqlErrorMatch[1] + ']');
+            if (errors && errors.length > 0) {
+                const error = errors[0];
+                let formatted = '❌ <strong>SOQL Error</strong>';
+                
+                // Extract the error message, removing the query part if present
+                if (error.message) {
+                    const messageParts = error.message.split('ERROR at');
+                    if (messageParts.length > 1) {
+                        // Show the error location
+                        const locationPart = 'ERROR at' + messageParts[1].split('\n')[0];
+                        formatted += '<br><span style="color:#666">' + locationPart + '</span>';
+                        
+                        // Show the actual error message (everything after the location line)
+                        const errorLines = messageParts[1].split('\n').slice(1).join('\n').trim();
+                        if (errorLines) {
+                            formatted += '<br>' + errorLines.replace(/\n/g, '<br>');
+                        }
+                    } else {
+                        // No location info, just show the message
+                        formatted += '<br>' + error.message.trim().replace(/\n/g, '<br>');
+                    }
+                }
+                
+                // Show error code if present
+                if (error.errorCode) {
+                    formatted += '<br><span style="color:#999;font-size:12px">Code: ' + error.errorCode + '</span>';
+                }
+                
+                return formatted;
+            }
+        } catch (e) {
+            // If parsing fails, fall through to default handling
+        }
+    }
+    
+    // Try to extract other IPC errors
+    const ipcMatch = errorMessage.match(/Error invoking remote method '([^']+)':\s*Error:\s*(.*)/s);
+    if (ipcMatch) {
+        return formatErrorMessage(ipcMatch[2]); // Recursively format the inner error
+    }
+    
+    // Default: just return the message with line breaks
+    return '❌ ' + errorMessage.replace(/\n/g, '<br>');
+}
 
 // Copy button
 document.getElementById('copyResultsBtn').addEventListener('click',()=>{ if(!log.innerText) return; navigator.clipboard.writeText(log.innerText).catch(err=>alert('❌ Failed to copy results')); });
@@ -589,6 +712,11 @@ function findPrev(pane) {
 
 // Ctrl+F handlers for both panes
 editor.addEventListener('keydown', e => {
+    // Allow standard undo/redo
+    if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
+        return; // Let browser handle undo/redo
+    }
+    
     if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         openSearch('editor');
@@ -766,6 +894,17 @@ editor.addEventListener("keydown",async e=>{
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='e'){
         e.preventDefault(); if(!window.api){ alert("Error: API not loaded."); return; }
 
+        // Close autocomplete if open
+        hideAutocomplete();
+
+        // Check if environment is selected
+        const envSelector = document.getElementById('envSelector');
+        if (!envSelector.value) {
+            log.innerHTML = '';
+            showEnvironmentReminder();
+            return;
+        }
+
         const text = editor.value;
         const cursorPos = editor.selectionStart;
 
@@ -836,7 +975,17 @@ editor.addEventListener("keydown",async e=>{
                 // Remove // and -- comments from SOQL
                 const cleanedBlock = targetBlock.split('\n').map(l=>l.replace(/(\/\/|--).*/,'').trim()).join('\n').trim();
                 const result = await window.api.executeSOQL(cleanedBlock, currentQueryId);
-                renderResult(result);
+                
+                // Check if query was aborted
+                if (result && result.aborted) {
+                    const errEl=document.createElement("div"); errEl.className="log-line";
+                    errEl.style.background = '#fff3cd';
+                    errEl.style.color = '#856404';
+                    errEl.innerHTML = '⏹ Query was stopped';
+                    log.appendChild(errEl);
+                } else {
+                    renderResult(result);
+                }
             } else {
                 // Treat each non-empty line as a REST path
                 const lines = targetBlock.split("\n").map(l=>l.trim()).filter(l=>l);
@@ -849,21 +998,14 @@ editor.addEventListener("keydown",async e=>{
                         renderResult(res);
                     } catch(err){
                         const errEl=document.createElement("div"); errEl.className="log-line";
-                        errEl.innerHTML=`❌ ${err.message.replace(/\n/g,'<br>')}`;
+                        errEl.innerHTML=formatErrorMessage(err.message);
                         log.appendChild(errEl);
                     }
                 }
             }
         } catch(err){
             const errEl=document.createElement("div"); errEl.className="log-line";
-            // Check if it was aborted
-            if (err.name === 'AbortError' || err.message.includes('aborted')) {
-                errEl.style.background = '#fff3cd';
-                errEl.style.color = '#856404';
-                errEl.innerHTML = '⏹ Query was stopped';
-            } else {
-                errEl.innerHTML=`❌ ${err.message.replace(/\n/g,'<br>')}`;
-            }
+            errEl.innerHTML=formatErrorMessage(err.message);
             log.appendChild(errEl);
         }
         
@@ -994,7 +1136,606 @@ function renderResult(result) {
     }
 }
 
-document.addEventListener('DOMContentLoaded',()=>{ if(window.api) loadEnvironments(); });
+// ===== AUTOCOMPLETE FUNCTIONS =====
+
+// Fetch and cache all SObjects
+async function fetchSObjects() {
+    if (sobjectsCache) return sobjectsCache;
+    try {
+        const result = await window.api.describeGlobal();
+        sobjectsCache = result.sobjects || [];
+        console.log('Cached', sobjectsCache.length, 'SObjects');
+        return sobjectsCache;
+    } catch (error) {
+        console.error('Error fetching SObjects:', error);
+        // Check if it's a config error
+        if (error.message && error.message.includes('No config selected')) {
+            showEnvironmentReminder();
+        }
+        return [];
+    }
+}
+
+// Fetch and cache fields for a specific object
+async function fetchObjectFields(objectName) {
+    if (objectFieldsCache[objectName]) return objectFieldsCache[objectName];
+    try {
+        const result = await window.api.describeObject(objectName);
+        objectFieldsCache[objectName] = result.fields || [];
+        console.log('Cached', objectFieldsCache[objectName].length, 'fields for', objectName);
+        return objectFieldsCache[objectName];
+    } catch (error) {
+        console.error('Error fetching fields for', objectName, ':', error);
+        // Check if it's a config error
+        if (error.message && error.message.includes('No config selected')) {
+            showEnvironmentReminder();
+        }
+        return [];
+    }
+}
+
+// Show reminder to select environment
+function showEnvironmentReminder() {
+    const log = document.getElementById('log');
+    
+    // Check if reminder is already displayed
+    const existingReminder = log.querySelector('.env-reminder');
+    if (existingReminder) return;
+    
+    const msg = document.createElement('div');
+    msg.className = 'log-line env-reminder';
+    msg.style.background = '#fff3cd';
+    msg.style.color = '#856404';
+    msg.style.padding = '5px';
+    msg.textContent = '⚠️ Please select an environment first';
+    log.appendChild(msg);
+}
+
+// Parse query context to determine what to suggest
+function getAutocompletContext(text, cursorPos) {
+    // Get text before and after cursor
+    const textBeforeCursor = text.substring(0, cursorPos);
+    const textAfterCursor = text.substring(cursorPos);
+    const textBeforeCursorUpper = textBeforeCursor.toUpperCase();
+    
+    // Get current word being typed
+    const wordMatch = textBeforeCursor.match(/[\w\.]+$/);
+    let currentWord = wordMatch ? wordMatch[0] : '';
+    
+    // If typing right before a keyword, strip it from currentWord
+    if (textAfterCursor.match(/^(FROM|WHERE|ORDER|GROUP|LIMIT)\b/i)) {
+        const keywordMatch = currentWord.match(/^(.*?)(FROM|WHERE|ORDER|GROUP|LIMIT)$/i);
+        if (keywordMatch) {
+            currentWord = keywordMatch[1];
+        }
+    }
+    
+    // ===== KEYWORD SUPPRESSION =====
+    // Suppress autocomplete when user is typing SOQL keywords themselves
+    
+    const currentWordUpper = currentWord.toUpperCase();
+    const textBeforeWord = textBeforeCursorUpper.substring(0, textBeforeCursorUpper.length - currentWord.length);
+    
+    // Suppress when typing "BY" after ORDER/GROUP
+    if (textBeforeCursorUpper.match(/\b(ORDER|GROUP)\s+B[Y]?$/i)) {
+        return null;
+    }
+    
+    // Suppress ORDER/GROUP keywords after FROM clause (e.g., "SELECT Id FROM Account Ord")
+    if (currentWordUpper.match(/^(ORD|ORDE|ORDER|GRO|GROU|GROUP)$/) && textBeforeWord.match(/\bFROM\s+\w+/i)) {
+        return null;
+    }
+    
+    // Suppress general SQL keywords at start of query or after clause keywords
+    const isTypingKeyword = currentWordUpper.match(/^(SEL|SELE|SELEC|SELECT|FRO|FROM|WH|WHE|WHER|WHERE|ORD|ORDE|ORDER|GRO|GROU|GROUP|LIM|LIMI|LIMIT|B|BY)$/);
+    if (isTypingKeyword && (textBeforeWord.match(/^\s*$/) || textBeforeWord.match(/\b(SELECT|WHERE|AND|OR|NOT|FROM)\s*$/i))) {
+        return null;
+    }
+    
+    // ===== OBJECT NAME DETECTION =====
+    // Extract current query block and find the object name from FROM clause
+    
+    let blockStart = 0;
+    for (let i = cursorPos - 1; i >= 0; i--) {
+        if (text[i] === '\n' && (i === 0 || text[i-1] === '\n')) {
+            blockStart = i + 1;
+            break;
+        }
+    }
+    let blockEnd = text.length;
+    for (let i = cursorPos; i < text.length; i++) {
+        if (text[i] === '\n' && (i === text.length - 1 || text[i+1] === '\n')) {
+            blockEnd = i;
+            break;
+        }
+    }
+    const queryBlock = text.substring(blockStart, blockEnd).toUpperCase();
+    
+    // Find object name from FROM clause (look ahead and in current block)
+    const fromMatchAhead = textAfterCursor.toUpperCase().match(/^FROM\s+(\w+)/);
+    const fromMatchInBlock = queryBlock.match(/\bFROM\s+(\w+)/);
+    const objectName = fromMatchAhead ? fromMatchAhead[1] : (fromMatchInBlock ? fromMatchInBlock[1] : null);
+    
+    // If typing the object name after FROM, suggest objects
+    if (textBeforeCursorUpper.match(/\bFROM\s*(\w*)$/)) {
+        return { type: 'object', prefix: currentWord };
+    }
+    
+    // ===== RELATIONSHIP FIELD DETECTION =====
+    // Check if typing a relationship field (e.g., Account.Name)
+    
+    if (currentWord.includes('.')) {
+        const parts = currentWord.split('.');
+        if (parts.length === 2) {
+            const relationshipName = parts[0];
+            const fieldPrefix = parts[1];
+            
+            // We need the base object's fields to find the relationship
+            if (objectName) {
+                return {
+                    type: 'relationship-field',
+                    baseObjectName: objectName,
+                    relationshipName: relationshipName,
+                    prefix: fieldPrefix
+                };
+            }
+        }
+    }
+    
+    // ===== CLAUSE DETECTION =====
+    // Determine which SOQL clause we're in and whether to suggest fields
+    
+    if (objectName) {
+        const selectMatch = textBeforeCursorUpper.match(/\bSELECT\b(.*)$/);
+        const whereMatch = textBeforeCursorUpper.match(/\bWHERE\b(.*)$/);
+        const orderByMatch = textBeforeCursorUpper.match(/\bORDER\s+BY\b(.*)$/);
+        const groupByMatch = textBeforeCursorUpper.match(/\bGROUP\s+BY\b(.*)$/);
+        
+        // SELECT clause - suggest fields before FROM or if FROM is ahead
+        if (selectMatch && (!selectMatch[1].includes('FROM') || fromMatchAhead)) {
+            return { type: 'field', objectName: objectName, prefix: currentWord };
+        }
+        
+        // ORDER BY clause - handle comma-separated fields and ASC/DESC keywords
+        if (orderByMatch) {
+            const textAfterOrderBy = orderByMatch[1];
+            const textBeforeWord = textAfterOrderBy.substring(0, textAfterOrderBy.length - currentWord.length);
+            
+            // After comma - show field suggestions
+            if (textBeforeWord.match(/,\s*$/)) {
+                return { type: 'field', objectName: objectName, prefix: currentWord };
+            }
+            
+            // Typing ASC/DESC - suppress
+            if (currentWord.toLowerCase().match(/^(a|as|asc|d|de|des|desc)$/)) {
+                return null;
+            }
+            
+            // After field name with space (before ASC/DESC) - suppress
+            if (textBeforeWord.match(/\w\s+$/) && currentWord === '') {
+                return null;
+            }
+            
+            return { type: 'field', objectName: objectName, prefix: currentWord };
+        }
+        
+        // WHERE clause - handle operators, values, quotes, and logical operators
+        if (whereMatch) {
+            const textAfterWhere = whereMatch[1];
+            const textBeforeWord = textAfterWhere.substring(0, textAfterWhere.length - currentWord.length);
+            
+            // After closing quote - suppress until AND/OR typed
+            if (textBeforeWord.match(/['"]\s*$/) && currentWord === '') {
+                return null;
+            }
+            
+            // After comparison operator - suppress (user is typing a value)
+            if (textAfterWhere.match(/(=|!=|<|>|<=|>=|\bLIKE|\bIN|\bNOT\s+IN)\s*['"]?[\w\s]*$/i)) {
+                return null;
+            }
+            
+            // Typing logical operators (AND/OR/NOT) after a condition - suppress
+            const hasLogicalKeywordBefore = textBeforeWord.match(/\b(AND|OR|NOT)\s+$/i);
+            if (!hasLogicalKeywordBefore && currentWord.toLowerCase().match(/^(a|an|and|o|or|n|no|not)$/i)) {
+                if (textBeforeWord.trim().match(/(['"\d\w]\s*$|\)\s*$)/)) {
+                    return null;
+                }
+            }
+            
+            return { type: 'field', objectName: objectName, prefix: currentWord };
+        }
+        
+        // GROUP BY clause - suggest fields
+        if (groupByMatch) {
+            return { type: 'field', objectName: objectName, prefix: currentWord };
+        }
+    }
+    return null;
+}
+
+// Show autocomplete dropdown with suggestions
+function showAutocomplete(suggestions, prefix, isField = false) {
+    const dropdown = document.getElementById('autocomplete');
+    const editor = document.getElementById('editor');
+    
+    if (!suggestions || suggestions.length === 0) {
+        hideAutocomplete();
+        return;
+    }
+    
+    // For fields, also include relationship names as separate suggestions
+    let allSuggestions = [...suggestions];
+    if (isField) {
+        const seenRelationships = new Set();
+        suggestions.forEach(field => {
+            // Only add relationship names from lookup/reference fields
+            if (field.type === 'reference' && field.relationshipName && 
+                field.referenceTo && field.referenceTo.length > 0 &&
+                !seenRelationships.has(field.relationshipName)) {
+                
+                seenRelationships.add(field.relationshipName);
+                
+                // Add relationship name as a separate suggestion
+                allSuggestions.push({
+                    name: field.relationshipName,
+                    label: `${field.label} relationship`,
+                    type: 'relationship',
+                    referenceTo: field.referenceTo,
+                    isRelationship: true
+                });
+            }
+        });
+    }
+    
+    // Filter suggestions by prefix (partial match anywhere in the name)
+    const filtered = allSuggestions.filter(item => {
+        const name = item.name;
+        return name.toLowerCase().includes(prefix.toLowerCase());
+    });
+    
+    if (filtered.length === 0) {
+        hideAutocomplete();
+        return;
+    }
+    
+    // Sort fields by priority
+    if (isField) {
+        filtered.sort((a, b) => {
+            const lowerPrefix = prefix.toLowerCase();
+            const aStartsWith = a.name.toLowerCase().startsWith(lowerPrefix);
+            const bStartsWith = b.name.toLowerCase().startsWith(lowerPrefix);
+            
+            // Prefix matches come first
+            if (aStartsWith && !bStartsWith) return -1;
+            if (!aStartsWith && bStartsWith) return 1;
+            
+            const getPriority = (field) => {
+                const name = field.name;
+                // Top tier: Id, Name
+                if (name === 'Id' || name === 'Name') return 1;
+                // Second tier: audit fields, ownership
+                if (['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 
+                     'SystemModstamp', 'OwnerId', 'RecordTypeId', 'IsDeleted'].includes(name)) return 2;
+                // Third tier: everything else
+                if (!field.isRelationship) return 3;
+                // Bottom tier: Relationship names (for traversal like Account, Owner)
+                return 4;
+            };
+            
+            const priorityA = getPriority(a);
+            const priorityB = getPriority(b);
+            
+            if (priorityA !== priorityB) {
+                return priorityA - priorityB;
+            }
+            
+            // Within same priority, sort alphabetically
+            return a.name.localeCompare(b.name);
+        });
+    } else {
+        // Sort objects - prefix matches first, then alphabetically
+        filtered.sort((a, b) => {
+            const lowerPrefix = prefix.toLowerCase();
+            const aStartsWith = a.name.toLowerCase().startsWith(lowerPrefix);
+            const bStartsWith = b.name.toLowerCase().startsWith(lowerPrefix);
+            
+            // Prefix matches come first
+            if (aStartsWith && !bStartsWith) return -1;
+            if (!aStartsWith && bStartsWith) return 1;
+            
+            // Within same match type, sort alphabetically
+            return a.name.localeCompare(b.name);
+        });
+    }
+    
+    autocompleteItems = filtered;
+    autocompleteSelectedIndex = 0;
+    
+    // Build dropdown HTML
+    dropdown.innerHTML = filtered.map((item, index) => {
+        let label, hint;
+        if (isField) {
+            // For fields, show API name as main, always show friendly label as hint
+            label = item.name;
+            if (item.isRelationship) {
+                // For relationship names, add indicator and show related object
+                const relatedObj = item.referenceTo ? item.referenceTo[0] : '';
+                hint = ` <span class="autocomplete-relationship">→ ${relatedObj}</span>`;
+            } else {
+                hint = item.label ? `<span class="autocomplete-hint">${item.label}</span>` : '';
+            }
+        } else {
+            // For objects, show API name as main, always show friendly label as hint
+            label = item.name;
+            hint = item.label ? `<span class="autocomplete-hint">${item.label}</span>` : '';
+        }
+        return `<div class="autocomplete-item${index === 0 ? ' selected' : ''}" data-index="${index}">${label}${hint}</div>`;
+    }).join('');
+    
+    // Position dropdown below cursor
+    const coords = getCaretCoordinates(editor);
+    dropdown.style.left = coords.left + 'px';
+    dropdown.style.top = coords.top + 'px';
+    dropdown.style.display = 'block';
+    autocompleteVisible = true;
+    
+    // Adjust position if dropdown would go off-screen
+    const dropdownRect = dropdown.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // Check if dropdown extends beyond right edge
+    if (dropdownRect.right > viewportWidth) {
+        dropdown.style.left = (viewportWidth - dropdownRect.width - 10) + 'px';
+    }
+    
+    // Check if dropdown extends beyond bottom edge
+    if (dropdownRect.bottom > viewportHeight) {
+        // Position above cursor instead
+        dropdown.style.top = (coords.top - dropdownRect.height - 20) + 'px';
+    }
+    
+    // Add click handlers
+    dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const index = parseInt(item.dataset.index);
+            selectAutocompleteItem(index);
+        });
+    });
+}
+
+// Hide autocomplete dropdown
+function hideAutocomplete() {
+    const dropdown = document.getElementById('autocomplete');
+    dropdown.style.display = 'none';
+    dropdown.innerHTML = '';
+    autocompleteVisible = false;
+    autocompleteSelectedIndex = -1;
+    autocompleteItems = [];
+}
+
+// Select an autocomplete item
+function selectAutocompleteItem(index) {
+    if (index < 0 || index >= autocompleteItems.length) return;
+    
+    const editor = document.getElementById('editor');
+    const cursorPos = editor.selectionStart;
+    const text = editor.value;
+    
+    // Find the start of the current word
+    const beforeCursor = text.substring(0, cursorPos);
+    const wordMatch = beforeCursor.match(/\w+$/);
+    const wordStart = wordMatch ? cursorPos - wordMatch[0].length : cursorPos;
+    
+    // Select the current word so we can replace it
+    editor.selectionStart = wordStart;
+    editor.selectionEnd = cursorPos;
+    editor.focus();
+    
+    // Insert the selected name, which preserves undo history
+    const selectedName = autocompleteItems[index].name;
+    document.execCommand('insertText', false, selectedName);
+    
+    hideAutocomplete();
+}
+
+// Move selection in autocomplete dropdown
+function moveAutocompleteSelection(direction) {
+    if (!autocompleteVisible || autocompleteItems.length === 0) return;
+    
+    // Update index
+    autocompleteSelectedIndex += direction;
+    if (autocompleteSelectedIndex < 0) autocompleteSelectedIndex = autocompleteItems.length - 1;
+    if (autocompleteSelectedIndex >= autocompleteItems.length) autocompleteSelectedIndex = 0;
+    
+    // Update UI
+    const dropdown = document.getElementById('autocomplete');
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    items.forEach((item, index) => {
+        if (index === autocompleteSelectedIndex) {
+            item.classList.add('selected');
+            item.scrollIntoView({ block: 'nearest' });
+        } else {
+            item.classList.remove('selected');
+        }
+    });
+}
+
+// Get cursor coordinates in textarea for positioning dropdown
+function getCaretCoordinates(element) {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    const lineHeight = parseInt(style.lineHeight) || 20;
+    const paddingTop = parseInt(style.paddingTop) || 0;
+    const paddingLeft = parseInt(style.paddingLeft) || 0;
+    
+    // Create a mirror div to measure text position
+    const mirror = document.createElement('div');
+    mirror.style.position = 'absolute';
+    mirror.style.visibility = 'hidden';
+    mirror.style.whiteSpace = 'pre-wrap';
+    mirror.style.wordWrap = 'break-word';
+    mirror.style.font = style.font;
+    mirror.style.padding = style.padding;
+    mirror.style.width = rect.width + 'px';
+    document.body.appendChild(mirror);
+    
+    // Get text before cursor
+    const textBeforeCursor = element.value.substring(0, element.selectionStart);
+    mirror.textContent = textBeforeCursor;
+    
+    // Add a span at the cursor position
+    const span = document.createElement('span');
+    span.textContent = '|';
+    mirror.appendChild(span);
+    
+    const spanRect = span.getBoundingClientRect();
+    const mirrorRect = mirror.getBoundingClientRect();
+    
+    document.body.removeChild(mirror);
+    
+    return {
+        left: rect.left + (spanRect.left - mirrorRect.left) + paddingLeft,
+        top: rect.top + (spanRect.top - mirrorRect.top) + paddingTop + lineHeight
+    };
+}
+
+// Handle autocomplete trigger on editor input
+async function handleEditorInput(event) {
+    // Check if autocomplete is enabled
+    if (!autocompleteEnabled) {
+        hideAutocomplete();
+        return;
+    }
+    
+    const editor = document.getElementById('editor');
+    const cursorPos = editor.selectionStart;
+    const text = editor.value;
+    
+    // Get context
+    const context = getAutocompletContext(text, cursorPos);
+    
+    if (!context) {
+        hideAutocomplete();
+        return;
+    }
+    
+    // Fetch suggestions based on context
+    if (context.type === 'object') {
+        const sobjects = await fetchSObjects();
+        showAutocomplete(sobjects, context.prefix, false);
+    } else if (context.type === 'field') {
+        const fields = await fetchObjectFields(context.objectName);
+        showAutocomplete(fields, context.prefix, true);
+    } else if (context.type === 'relationship-field') {
+        // Resolve the related object from the relationship field
+        const baseFields = await fetchObjectFields(context.baseObjectName);
+        
+        // Find the relationship field
+        const relationshipField = baseFields.find(f => 
+            f.relationshipName && f.relationshipName.toLowerCase() === context.relationshipName.toLowerCase()
+        );
+        
+        if (relationshipField && relationshipField.referenceTo && relationshipField.referenceTo.length > 0) {
+            const relatedObjectName = relationshipField.referenceTo[0];
+            const relatedFields = await fetchObjectFields(relatedObjectName);
+            showAutocomplete(relatedFields, context.prefix, true);
+        } else {
+            hideAutocomplete();
+        }
+    }
+}
+
+// Handle keyboard navigation in autocomplete
+function handleEditorKeydown(event) {
+    // Allow standard undo/redo
+    if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
+        return; // Let browser handle undo/redo
+    }
+    
+    if (autocompleteVisible) {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            moveAutocompleteSelection(1);
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            moveAutocompleteSelection(-1);
+            return;
+        }
+        if (event.key === 'PageDown') {
+            event.preventDefault();
+            moveAutocompleteSelection(5);
+            return;
+        }
+        if (event.key === 'PageUp') {
+            event.preventDefault();
+            moveAutocompleteSelection(-5);
+            return;
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+            event.preventDefault();
+            selectAutocompleteItem(autocompleteSelectedIndex);
+            return;
+        }
+        if (event.key === ',') {
+            event.preventDefault();
+            selectAutocompleteItem(autocompleteSelectedIndex);
+            // Insert comma after selection
+            setTimeout(() => {
+                document.execCommand('insertText', false, ',');
+            }, 0);
+            return;
+        }
+        if (event.key === '.') {
+            // Only allow period completion on relationship fields
+            const selectedItem = autocompleteItems[autocompleteSelectedIndex];
+            if (selectedItem && selectedItem.isRelationship) {
+                event.preventDefault();
+                selectAutocompleteItem(autocompleteSelectedIndex);
+                // Insert period after selection
+                setTimeout(() => {
+                    document.execCommand('insertText', false, '.');
+                }, 0);
+                return;
+            }
+            // Otherwise, let the period character pass through normally (hide autocomplete)
+            hideAutocomplete();
+            return;
+        }
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            hideAutocomplete();
+            return;
+        }
+    }
+}
+
+// Initialize autocomplete
+function initAutocomplete() {
+    const editor = document.getElementById('editor');
+    editor.addEventListener('input', handleEditorInput);
+    editor.addEventListener('keydown', handleEditorKeydown);
+    
+    // Restore autocomplete enabled state from localStorage
+    const checkbox = document.getElementById('autocompleteEnabled');
+    checkbox.checked = autocompleteEnabled;
+    
+    // Hide autocomplete when clicking outside
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('#autocomplete') && event.target.id !== 'editor') {
+            hideAutocomplete();
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded',()=>{ 
+    if(window.api) {
+        loadEnvironments();
+        initAutocomplete();
+    }
+});
 </script>
 </body>
 </html>

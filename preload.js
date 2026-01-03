@@ -23,7 +23,11 @@ try {
         onOAuthError: (callback) => ipcRenderer.on('oauth-error', (event, error) => callback(error)),
         
         // Pagination progress listener
-        onSOQLProgress: (callback) => ipcRenderer.on('soql-progress', (event, progress) => callback(progress))
+        onSOQLProgress: (callback) => ipcRenderer.on('soql-progress', (event, progress) => callback(progress)),
+        
+        // Metadata operations
+        describeGlobal: () => ipcRenderer.invoke('describe-global'),
+        describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName)
     });
 
     console.log('API exposed successfully via contextBridge - all operations via IPC');

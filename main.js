@@ -246,11 +246,19 @@ ipcMain.handle('execute-soql', async (event, query, queryId) => {
         
         return result;
     } catch (error) {
-        console.error('Error executing SOQL:', error);
-        // Clean up abort controller on error
+        // Clean up abort controller
         if (queryId) {
             abortControllers.delete(queryId);
         }
+        
+        // Don't throw abort errors - these are expected when user stops a query
+        // Just return a special response instead
+        if (error.name === 'AbortError') {
+            return { aborted: true };
+        }
+        
+        // Log and throw other errors
+        console.error('Error executing SOQL:', error);
         throw error;
     }
 });
@@ -278,6 +286,26 @@ ipcMain.handle('execute-rest', async (event, path) => {
         return await salesforce.executeREST(path);
     } catch (error) {
         console.error('Error executing REST:', error);
+        throw error;
+    }
+});
+
+// Handle describe global request
+ipcMain.handle('describe-global', async (event) => {
+    try {
+        return await salesforce.describeGlobal();
+    } catch (error) {
+        console.error('Error describing global:', error);
+        throw error;
+    }
+});
+
+// Handle describe object request
+ipcMain.handle('describe-object', async (event, objectName) => {
+    try {
+        return await salesforce.describeObject(objectName);
+    } catch (error) {
+        console.error('Error describing object:', error);
         throw error;
     }
 });
