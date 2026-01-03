@@ -4,6 +4,7 @@ const http = require('http');
 const url = require('url');
 
 let mainWindow;
+let resultWindows = []; // Track all result popup windows
 let oauthCallbackServer;
 let actualRedirectUri = null; // Will be set when server starts
 const PORT_RANGE_START = 8888;
@@ -29,6 +30,17 @@ function createWindow() {
     Menu.setApplicationMenu(null);
 
     mainWindow.loadFile('index.html');
+    
+    // Close all result windows when main window is closed
+    mainWindow.on('closed', () => {
+        resultWindows.forEach(win => {
+            if (win && !win.isDestroyed()) {
+                win.close();
+            }
+        });
+        resultWindows = [];
+        mainWindow = null;
+    });
 }
 
 // Setup OAuth callback server with automatic port fallback
@@ -327,12 +339,32 @@ ipcMain.handle('open-external', async (event, url) => {
     }
 });
 
+// Track window positions for cascading
+let lastWindowPosition = { x: 100, y: 100 };
+const WINDOW_OFFSET = 30;
+
 // Open a new window with REST API result
 ipcMain.handle('open-result-window', async (event, data) => {
     try {
+        // Calculate cascading position
+        const x = lastWindowPosition.x;
+        const y = lastWindowPosition.y;
+        
+        // Update position for next window (cascade down-right)
+        lastWindowPosition.x += WINDOW_OFFSET;
+        lastWindowPosition.y += WINDOW_OFFSET;
+        
+        // Reset if we've cascaded too far
+        if (lastWindowPosition.x > 400 || lastWindowPosition.y > 400) {
+            lastWindowPosition = { x: 100, y: 100 };
+        }
+        
         const resultWindow = new BrowserWindow({
             width: 800,
             height: 600,
+            x: x,
+            y: y,
+            frame: false,
             webPreferences: {
                 contextIsolation: false,
                 nodeIntegration: true,
@@ -343,6 +375,9 @@ ipcMain.handle('open-result-window', async (event, data) => {
         
         // Remove menu from result window
         resultWindow.setMenu(null);
+        
+        // Track result window
+        resultWindows.push(resultWindow);
         
         // Store the data temporarily with the window ID
         const windowId = resultWindow.id;
@@ -356,6 +391,11 @@ ipcMain.handle('open-result-window', async (event, data) => {
             if (global.resultWindowData) {
                 delete global.resultWindowData[windowId];
             }
+            // Remove from tracking array
+            const index = resultWindows.indexOf(resultWindow);
+            if (index > -1) {
+                resultWindows.splice(index, 1);
+            }
         });
         
         resultWindow.loadFile('result-window.html');
@@ -363,6 +403,22 @@ ipcMain.handle('open-result-window', async (event, data) => {
         return { success: true };
     } catch (error) {
         console.error('Error opening result window:', error);
+        throw error;
+    }
+});
+
+// Close all result popup windows
+ipcMain.handle('close-all-popups', async () => {
+    try {
+        resultWindows.forEach(win => {
+            if (win && !win.isDestroyed()) {
+                win.close();
+            }
+        });
+        resultWindows = [];
+        return { success: true };
+    } catch (error) {
+        console.error('Error closing all popups:', error);
         throw error;
     }
 });

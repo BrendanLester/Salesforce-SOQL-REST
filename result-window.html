@@ -4,18 +4,36 @@
 <meta charset="UTF-8">
 <title>REST API Result</title>
 <style>
-body { margin:0; padding:20px; font-family:sans-serif; background:#f5f5f5; }
-.container { max-width:1200px; margin:0 auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
-.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:2px solid #0066cc; padding-bottom:10px; }
+body { margin:0; padding:0; font-family:sans-serif; background:#f5f5f5; overflow:hidden; height:100vh; display:flex; flex-direction:column; box-shadow:0 0 0 1px #888; }
+.title-bar { display:flex; align-items:center; justify-content:space-between; height:32px; background:#e8e8e8; color:#333; border-bottom:1px solid #ccc; -webkit-app-region:drag; user-select:none; flex-shrink:0; }
+.title-bar-drag-region { flex:1; padding-left:12px; font-size:13px; font-weight:500; }
+.title-bar-buttons { display:flex; -webkit-app-region:no-drag; }
+.title-btn { background:transparent; border:none; color:#333; width:46px; height:32px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background 0.15s; }
+.title-btn:hover { background:#d0d0d0; }
+.title-btn.close-btn { font-size:22px; font-weight:300; line-height:1; }
+.title-btn.close-btn:hover { background:#e81123; color:#fff; }
+.title-btn.close-all-btn { width:auto; padding:0 12px; font-size:12px; border-right:1px solid #ccc; }
+.title-btn.close-all-btn:hover { background:#dc3545; color:#fff; }
+.title-btn.minimize-btn { font-size:18px; }
+.container { width:100%; margin:0; background:#fff; padding:0; border-radius:0; box-shadow:none; flex:1; overflow:hidden; box-sizing:border-box; display:flex; flex-direction:column; }
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0; border-bottom:2px solid #0066cc; padding:20px 20px 10px 20px; flex-shrink:0; }
 h1 { margin:0; color:#333; font-size:18px; }
 .action-btn { padding:4px 8px; font-size:12px; cursor:pointer; }
 .action-btn.sf-link { background:#0066cc; color:#fff; }
-pre { background:#f8f8f8; padding:15px; border-radius:4px; overflow:auto; font-family:monospace; font-size:13px; line-height:1.5; border:1px solid #ddd; cursor:text; user-select:text; }
+#content { flex:1; overflow:auto; padding:20px; }
+pre { background:#f8f8f8; padding:15px; border-radius:4px; overflow:auto; font-family:monospace; font-size:13px; line-height:1.5; border:1px solid #ddd; cursor:text; user-select:text; max-height:none; }
 pre:focus { outline:none; }
 .error { background:#f8d7da; color:#721c24; padding:15px; border-radius:4px; border:1px solid #f5c6cb; }
 </style>
 </head>
 <body>
+<div class="title-bar">
+    <div class="title-bar-drag-region">REST API Result</div>
+    <div class="title-bar-buttons">
+        <button id="closeAllBtn" class="title-btn close-all-btn" title="Close All Popups">✕ Close All</button>
+        <button class="title-btn close-btn" onclick="window.close()" title="Close">×</button>
+    </div>
+</div>
 <div class="container">
     <div class="header">
         <h1>REST API Result</h1>
@@ -30,6 +48,19 @@ pre:focus { outline:none; }
 
 <script>
 const { ipcRenderer } = require('electron');
+
+// Close all popups button handler (in title bar)
+const closeAllBtn = document.getElementById('closeAllBtn');
+if (closeAllBtn) {
+    closeAllBtn.addEventListener('click', async (e) => {
+        e.stopPropagation(); // Prevent drag region interference
+        try {
+            await ipcRenderer.invoke('close-all-popups');
+        } catch (err) {
+            console.error('Error closing all popups:', err);
+        }
+    });
+}
 
 // Close window on Escape key
 document.addEventListener('keydown', (e) => {
@@ -72,8 +103,16 @@ ipcRenderer.invoke('get-result-data').then(resultData => {
             }
         });
         
-        // Auto-focus the pre element so user can immediately Ctrl+A
-        setTimeout(() => pre.focus(), 100);
+        // Auto-focus the pre element and ensure scroll is at top
+        setTimeout(() => {
+            pre.focus();
+            pre.scrollTop = 0;
+            // Scroll the content div to top
+            const content = document.getElementById('content');
+            if (content) {
+                content.scrollTop = 0;
+            }
+        }, 100);
         
         // Show copy button
         copyBtn.style.display = 'block';
@@ -113,8 +152,14 @@ ipcRenderer.invoke('get-result-data').then(resultData => {
         
         // Update title with object type if available
         if (resultData.attributes && resultData.attributes.type) {
-            document.title = `${resultData.attributes.type} - ${resultData.Id || 'Record'}`;
+            const titleText = `${resultData.attributes.type} - ${resultData.Id || 'Record'}`;
+            document.title = titleText;
             document.querySelector('h1').textContent = `${resultData.attributes.type} Record`;
+            // Update title bar text
+            const titleBarDragRegion = document.querySelector('.title-bar-drag-region');
+            if (titleBarDragRegion) {
+                titleBarDragRegion.textContent = titleText;
+            }
         }
         
         // Show "Open in Salesforce" button if we have an ID

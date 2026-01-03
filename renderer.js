@@ -79,17 +79,35 @@ window.createCodeMirrorEditor = function(parent) {
         });
       } else if (acContext.type === 'field') {
         const fields = await window.fetchObjectFields(acContext.objectName);
-        suggestions = fields.map(field => {
-          let detail = field.label || field.type;
-          if (field.isRelationship && field.referenceTo && field.referenceTo.length > 0) {
-            detail = `${field.label || field.relationshipName} → ${field.referenceTo.join(', ')}`;
+        suggestions = fields.flatMap(field => {
+          // For relationship fields, add both the ID field and the relationship name
+          if (field.isRelationship && field.relationshipName) {
+            const relationshipDetail = `${field.label || field.relationshipName} → ${field.referenceTo.join(', ')}`;
+            return [
+              // The Id field (e.g., OwnerId) - just a regular field
+              {
+                label: field.name,
+                type: "property",
+                detail: field.label || field.type,
+                info: field.type
+              },
+              // The relationship name (e.g., Owner) - shows relationship
+              {
+                label: field.relationshipName,
+                type: "namespace",
+                detail: relationshipDetail,
+                info: 'relationship'
+              }
+            ];
           }
-          return {
-            label: field.isRelationship ? field.relationshipName : field.name,
-            type: field.isRelationship ? "namespace" : "property",
-            detail: detail,
+          
+          // Regular fields
+          return [{
+            label: field.name,
+            type: "property",
+            detail: field.label || field.type,
             info: field.type
-          };
+          }];
         });
       } else if (acContext.type === 'relationship-field') {
         const baseFields = await window.fetchObjectFields(acContext.baseObjectName);
@@ -100,17 +118,35 @@ window.createCodeMirrorEditor = function(parent) {
         if (relationshipField && relationshipField.referenceTo && relationshipField.referenceTo.length > 0) {
           const relatedObjectName = relationshipField.referenceTo[0];
           const relatedFields = await window.fetchObjectFields(relatedObjectName);
-          suggestions = relatedFields.map(field => {
-            let detail = field.label || field.type;
-            if (field.isRelationship && field.referenceTo && field.referenceTo.length > 0) {
-              detail = `${field.label || field.relationshipName} → ${field.referenceTo.join(', ')}`;
+          suggestions = relatedFields.flatMap(field => {
+            // For relationship fields, add both the ID field and the relationship name
+            if (field.isRelationship && field.relationshipName) {
+              const relationshipDetail = `${field.label || field.relationshipName} → ${field.referenceTo.join(', ')}`;
+              return [
+                // The Id field (e.g., OwnerId) - just a regular field
+                {
+                  label: field.name,
+                  type: "property",
+                  detail: field.label || field.type,
+                  info: field.type
+                },
+                // The relationship name (e.g., Owner) - shows relationship
+                {
+                  label: field.relationshipName,
+                  type: "namespace",
+                  detail: relationshipDetail,
+                  info: 'relationship'
+                }
+              ];
             }
-            return {
-              label: field.isRelationship ? field.relationshipName : field.name,
-              type: field.isRelationship ? "namespace" : "property",
-              detail: detail,
+            
+            // Regular fields
+            return [{
+              label: field.name,
+              type: "property",
+              detail: field.label || field.type,
               info: field.type
-            };
+            }];
           });
         }
       } else if (acContext.type === 'multi-relationship-field') {
@@ -133,25 +169,43 @@ window.createCodeMirrorEditor = function(parent) {
         
         // Now fetch fields from the final object
         const finalFields = await window.fetchObjectFields(currentObjectName);
-        suggestions = finalFields.map(field => {
-          let detail = field.label || field.type;
-          if (field.isRelationship && field.referenceTo && field.referenceTo.length > 0) {
-            detail = `${field.label || field.relationshipName} → ${field.referenceTo.join(', ')}`;
+        suggestions = finalFields.flatMap(field => {
+          // For relationship fields, add both the ID field and the relationship name
+          if (field.isRelationship && field.relationshipName) {
+            const relationshipDetail = `${field.label || field.relationshipName} → ${field.referenceTo.join(', ')}`;
+            return [
+              // The Id field (e.g., OwnerId) - just a regular field
+              {
+                label: field.name,
+                type: "property",
+                detail: field.label || field.type,
+                info: field.type
+              },
+              // The relationship name (e.g., Owner) - shows relationship
+              {
+                label: field.relationshipName,
+                type: "namespace",
+                detail: relationshipDetail,
+                info: 'relationship'
+              }
+            ];
           }
-          return {
-            label: field.isRelationship ? field.relationshipName : field.name,
-            type: field.isRelationship ? "namespace" : "property",
-            detail: detail,
+          
+          // Regular fields
+          return [{
+            label: field.name,
+            type: "property",
+            detail: field.label || field.type,
             info: field.type
-          };
+          }];
         });
       }
       
       if (suggestions.length === 0) return null;
       
-      // Filter by prefix
+      // Filter by prefix using substring matching
       const prefix = acContext.prefix.toLowerCase();
-      const filtered = suggestions.filter(s => s.label.toLowerCase().startsWith(prefix));
+      const filtered = suggestions.filter(s => s.label.toLowerCase().includes(prefix));
       
       if (filtered.length === 0) return null;
       

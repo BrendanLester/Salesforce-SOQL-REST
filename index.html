@@ -26,7 +26,8 @@ try {
         describeGlobal: () => ipcRenderer.invoke('describe-global'),
         describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName),
         openExternal: (url) => ipcRenderer.invoke('open-external', url),
-        openResultWindow: (data) => ipcRenderer.invoke('open-result-window', data)
+        openResultWindow: (data) => ipcRenderer.invoke('open-result-window', data),
+        closeAllPopups: () => ipcRenderer.invoke('close-all-popups')
     };
 
     // Load CodeMirror editor setup
@@ -912,6 +913,41 @@ function getObjectTypeFromRecord(rec) {
     return null;
 }
 
+// Determine object type from an Id field name
+function getObjectTypeFromFieldName(fieldName, rec) {
+    // For the main "Id" field, use the record's object type
+    if (fieldName === 'Id') {
+        return getObjectTypeFromRecord(rec);
+    }
+    
+    // For fields ending in "Id", try to determine the object type
+    if (fieldName.endsWith('Id')) {
+        // Remove "Id" suffix to get potential relationship name
+        const baseName = fieldName.slice(0, -2);
+        
+        // Check if there's a relationship object with the same name
+        if (rec[baseName] && typeof rec[baseName] === 'object' && rec[baseName].attributes && rec[baseName].attributes.type) {
+            return rec[baseName].attributes.type;
+        }
+        
+        // Try to use cached metadata to determine object type
+        const objectType = getObjectTypeFromRecord(rec);
+        if (objectType && objectFieldsCache[objectType]) {
+            const field = objectFieldsCache[objectType].find(f => f.name === fieldName);
+            if (field && field.referenceTo && field.referenceTo.length > 0) {
+                // Use the first referenced object type (handles polymorphic fields)
+                return field.referenceTo[0];
+            }
+        }
+        
+        // Fallback: assume the base name is the object type
+        // (e.g., AccountId -> Account, ContactId -> Contact)
+        return baseName;
+    }
+    
+    return null;
+}
+
 // Add ID click behavior to a cell
 function makeIdClickable(td, objectType, idValue) {
     td.style.color = '#0066cc';
@@ -1087,9 +1123,9 @@ if(window.api?.onSOQLProgress) {
                     else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
                 } else {
                     td.textContent = String(val);
-                    // Make Id field clickable
-                    if (h === 'Id' && val) {
-                        const objectType = getObjectTypeFromRecord(rec);
+                    // Make Id fields clickable (Id, AccountId, OwnerId, etc.)
+                    if (h.endsWith('Id') && val && val.length === 18) {
+                        const objectType = getObjectTypeFromFieldName(h, rec);
                         if (objectType) {
                             makeIdClickable(td, objectType, val);
                         }
@@ -1449,9 +1485,9 @@ function renderResult(result) {
                 else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
             } else {
                 td.textContent = String(val);
-                // Make Id field clickable
-                if (h === 'Id' && val) {
-                    const objectType = getObjectTypeFromRecord(rec);
+                // Make Id fields clickable (Id, AccountId, OwnerId, etc.)
+                if (h.endsWith('Id') && val && val.length === 18) {
+                    const objectType = getObjectTypeFromFieldName(h, rec);
                     if (objectType) {
                         makeIdClickable(td, objectType, val);
                     }
@@ -1578,9 +1614,9 @@ function sortTable(columnIndex, fieldName, displayName) {
                     else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
                 } else {
                     td.textContent = String(val);
-                    // Make Id field clickable
-                    if (h === 'Id' && val) {
-                        const objectType = getObjectTypeFromRecord(rec);
+                    // Make Id fields clickable (Id, AccountId, OwnerId, etc.)
+                    if (h.endsWith('Id') && val && val.length === 18) {
+                        const objectType = getObjectTypeFromFieldName(h, rec);
                         if (objectType) {
                             makeIdClickable(td, objectType, val);
                         }
@@ -1665,9 +1701,9 @@ function applyFilters() {
                 else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
             } else {
                 td.textContent = String(val);
-                // Make Id field clickable
-                if (h === 'Id' && val) {
-                    const objectType = getObjectTypeFromRecord(rec);
+                // Make Id fields clickable (Id, AccountId, OwnerId, etc.)
+                if (h.endsWith('Id') && val && val.length === 18) {
+                    const objectType = getObjectTypeFromFieldName(h, rec);
                     if (objectType) {
                         makeIdClickable(td, objectType, val);
                     }
