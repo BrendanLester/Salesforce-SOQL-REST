@@ -10,17 +10,12 @@ const PORT_RANGE_START = 8888;
 const PORT_RANGE_END = 8892; // Try 5 ports
 
 function createWindow() {
-    const preloadPath = path.join(__dirname, 'preload.js');
-    console.log('Preload path:', preloadPath);
-    console.log('Preload file exists:', require('fs').existsSync(preloadPath));
-
     mainWindow = new BrowserWindow({
         width: 1000,
         height: 700,
         webPreferences: {
-            preload: preloadPath,
-            contextIsolation: true,
-            nodeIntegration: false,
+            contextIsolation: false,
+            nodeIntegration: true,
             enableRemoteModule: false,
             sandbox: false
         }

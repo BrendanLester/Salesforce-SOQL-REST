@@ -3,6 +3,37 @@
 <head>
 <meta charset="UTF-8">
 <title>Playforce Query</title>
+<script>
+try {
+    // Setup API bridge directly in renderer
+    const { ipcRenderer } = require('electron');
+
+    window.api = {
+        executeSOQL: (query, queryId) => ipcRenderer.invoke('execute-soql', query, queryId),
+        executeREST: (path) => ipcRenderer.invoke('execute-rest', path),
+        abortQuery: (queryId) => ipcRenderer.invoke('abort-query', queryId),
+        setConfigFile: (configName) => ipcRenderer.invoke('set-config-file', configName),
+        listConfigs: () => ipcRenderer.invoke('list-configs'),
+        getCurrentConfig: () => ipcRenderer.invoke('get-current-config'),
+        requiresOAuth: () => ipcRenderer.invoke('requires-oauth'),
+        tryAuthenticate: () => ipcRenderer.invoke('try-authenticate'),
+        hasValidToken: () => ipcRenderer.invoke('has-valid-token'),
+        startOAuthFlow: () => ipcRenderer.invoke('start-oauth-flow'),
+        exchangeAuthCode: (authCode, redirectUri) => ipcRenderer.invoke('exchange-auth-code', authCode, redirectUri),
+        onOAuthCallback: (callback) => ipcRenderer.on('oauth-callback', (event, code) => callback(code)),
+        onOAuthError: (callback) => ipcRenderer.on('oauth-error', (event, error) => callback(error)),
+        onSOQLProgress: (callback) => ipcRenderer.on('soql-progress', (event, progress) => callback(progress)),
+        describeGlobal: () => ipcRenderer.invoke('describe-global'),
+        describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName),
+        openExternal: (url) => ipcRenderer.invoke('open-external', url)
+    };
+
+    // Load CodeMirror editor setup
+    require('./renderer.js');
+} catch (error) {
+    console.error('Error in head script:', error);
+}
+</script>
 <style>
 body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:sans-serif; }
 #toolbar { display:flex; gap:10px; padding:8px; background:#e8e8e8; border-bottom:1px solid #ccc; }
@@ -11,8 +42,7 @@ body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:
 #toolbar input[type="file"] { display:none; }
 #top, #bottom { flex:1; overflow:hidden; }
 #splitter { height:5px; background:#888; cursor:row-resize; }
-textarea { width:100%; height:100%; resize:none; font-family:monospace; font-size:14px; box-sizing:border-box; padding:8px; overflow:auto; }
-textarea::selection { background:#ffd700; color:#000; }
+#editor { width:100%; height:100%; }
 #log { padding:2px 2px 8px 2px; font-family:monospace; font-size:14px; overflow:hidden; flex:1; outline:none; position:relative; }
 #log:focus { box-shadow: inset 0 0 0 2px #0066cc; }
 #logContent { height:100%; overflow:auto; padding:2px 6px 12px 6px; box-sizing:border-box; }
@@ -126,15 +156,7 @@ tr:hover { background:#fffae6; }
 </div>
 
 <div id="top" style="background:#f0f0f0; position:relative;">
-<textarea id="editor" placeholder="Type SOQL queries or REST paths here..." spellcheck="false"></textarea>
-<div id="autocomplete"></div>
-<div id="editorSearch" class="search-box">
-    <input type="text" placeholder="Search..." id="editorSearchInput">
-    <span id="editorMatchCount" style="font-size:11px; color:#666; margin-right:4px;"></span>
-    <button onclick="findNext('editor')" title="Find Next (Enter)">↓</button>
-    <button onclick="findPrev('editor')" title="Find Previous (Shift+Enter)">↑</button>
-    <button onclick="closeSearch('editor')" title="Close (Escape)">✕</button>
-</div>
+<div id="editor"></div>
 </div>
 <div id="splitter"></div>
 <div id="bottom" style="background:#fff; display:flex; flex-direction:column; position:relative;">
@@ -164,9 +186,6 @@ let currentRedirectUri = null;
 // Autocomplete state
 let sobjectsCache = null; // Cached list of SObjects
 let objectFieldsCache = {}; // Cached field metadata per object: { objectName: fieldsArray }
-let autocompleteVisible = false;
-let autocompleteSelectedIndex = -1;
-let autocompleteItems = [];
 let autocompleteEnabled = localStorage.getItem('autocompleteEnabled') !== 'false'; // Default true
 
 // Store current result data for export
@@ -282,14 +301,23 @@ function highlightSOQL(query) {
 
 // Environment functions
 async function loadEnvironments() {
-    if (!window.api?.listConfigs) return;
-    const configs = await window.api.listConfigs();
-    const selector = document.getElementById('envSelector');
-    while (selector.children.length > 1) selector.removeChild(selector.lastChild);
-    if (!configs.length) {
-        const opt = document.createElement('option'); opt.textContent='No configs found'; opt.disabled=true; selector.appendChild(opt);
-    } else {
-        configs.forEach(c=>{ const opt=document.createElement('option'); opt.value=c; opt.textContent=c; selector.appendChild(opt); });
+    if (!window.api?.listConfigs) {
+        console.error('window.api.listConfigs not available');
+        return;
+    }
+    
+    try {
+        const configs = await window.api.listConfigs();
+        
+        const selector = document.getElementById('envSelector');
+        while (selector.children.length > 1) selector.removeChild(selector.lastChild);
+        if (!configs.length) {
+            const opt = document.createElement('option'); opt.textContent='No configs found'; opt.disabled=true; selector.appendChild(opt);
+        } else {
+            configs.forEach(c=>{ const opt=document.createElement('option'); opt.value=c; opt.textContent=c; selector.appendChild(opt); });
+        }
+    } catch (error) {
+        console.error('Error loading environments:', error);
     }
 }
 
@@ -464,6 +492,7 @@ if (window.api?.onOAuthError) {
 
 // Session save/load
 function saveSession() {
+    if (!editorView) return;
     const now = new Date();
     const timestamp = now.getFullYear() + '-' + 
         String(now.getMonth() + 1).padStart(2, '0') + '-' + 
@@ -471,18 +500,24 @@ function saveSession() {
         String(now.getHours()).padStart(2, '0') + '-' + 
         String(now.getMinutes()).padStart(2, '0') + '-' + 
         String(now.getSeconds()).padStart(2, '0');
-    const blob=new Blob([editor.value],{type:'text/plain'});
+    const blob=new Blob([editorView.state.doc.toString()],{type:'text/plain'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`soql-session-${timestamp}.txt`; a.click(); URL.revokeObjectURL(a.href);
 }
 function loadSession(e){
+    if (!editorView) return;
     const file=e.target.files[0]; if(!file) return;
     const reader=new FileReader();
     reader.onload=function(ev){
-        editor.value=ev.target.result;
+        editorView.dispatch({
+            changes: { from: 0, to: editorView.state.doc.length, insert: ev.target.result }
+        });
         logContent.innerHTML=''; const msg=document.createElement('div');
         msg.className='log-line'; msg.style.background="#d4edda"; msg.style.color="#155724"; msg.style.padding="5px";
         msg.textContent=`✅ Session loaded from ${file.name}`;
         logContent.appendChild(msg);
+        
+        // Pre-fetch fields for objects in loaded session
+        initAutocomplete();
     }; reader.readAsText(file); e.target.value='';
 }
 
@@ -519,7 +554,8 @@ document.addEventListener("mouseup", () => {
     document.body.style.cursor = "default";
 });
 
-const editor = document.getElementById("editor");
+// Initialize CodeMirror editor
+let editorView = null;
 const log = document.getElementById("log");
 const logContent = document.getElementById("logContent");
 
@@ -628,20 +664,19 @@ log.addEventListener('click', () => log.focus());
 // Global Escape handler to close search boxes or stop query
 document.addEventListener('keydown', e => {
     if(e.key === 'Escape') {
-        const editorSearch = document.getElementById('editorSearch');
         const logSearch = document.getElementById('logSearch');
         const helpModal = document.getElementById('helpModal');
         
         // Priority 1: Close help modal if open
         if(helpModal.style.display === 'flex') {
             toggleHelp();
-        // Priority 2: Close search boxes if open
-        } else if(editorSearch.style.display === 'block') {
-            closeSearch('editor');
-        } else if(logSearch.style.display === 'block') {
+        }
+        // Priority 2: Close search box if open
+        else if(logSearch.style.display === 'block') {
             closeSearch('log');
-        } else if(currentQueryId) {
-            // Priority 3: Stop running query if no popups are open
+        }
+        // Priority 3: Stop running query if no popups are open
+        else if(currentQueryId) {
             stopQuery();
         }
     }
@@ -665,11 +700,7 @@ function closeSearch(pane) {
 }
 
 function clearHighlights(pane) {
-    if(pane === 'editor') {
-        // For textarea, we can't highlight directly, so we'll just clear selection
-        editor.setSelectionRange(0, 0);
-        document.getElementById('editorMatchCount').textContent = '';
-    } else {
+    if(pane === 'log') {
         // For log, remove highlight spans
         const highlights = logContent.querySelectorAll('.search-highlight, .search-current');
         highlights.forEach(span => {
@@ -681,65 +712,6 @@ function clearHighlights(pane) {
     }
     currentMatches[pane] = [];
     currentMatchIndex[pane] = -1;
-}
-
-function findInEditor(searchText, direction = 1) {
-    if(!searchText) return;
-    
-    const text = editor.value.toLowerCase();
-    const searchLower = searchText.toLowerCase();
-    const matches = [];
-    let pos = 0;
-    
-    // Find all matches
-    while((pos = text.indexOf(searchLower, pos)) !== -1) {
-        matches.push(pos);
-        pos++;
-    }
-    
-    if(matches.length === 0) return;
-    
-    // Initialize or update current match index
-    if(!currentMatches['editor'] || currentMatches['editor'].searchText !== searchText) {
-        currentMatches['editor'] = { matches: matches, searchText: searchText };
-        currentMatchIndex['editor'] = 0;
-    } else {
-        const currentPos = editor.selectionStart;
-        let nearestIndex = 0;
-        
-        // Find current position in matches
-        for(let i = 0; i < matches.length; i++) {
-            if(matches[i] >= currentPos) {
-                nearestIndex = i;
-                break;
-            }
-        }
-        
-        if(direction > 0) {
-            currentMatchIndex['editor'] = (nearestIndex < matches.length - 1) ? nearestIndex + 1 : 0;
-        } else {
-            currentMatchIndex['editor'] = (nearestIndex > 0) ? nearestIndex - 1 : matches.length - 1;
-        }
-    }
-    
-    const matchPos = matches[currentMatchIndex['editor']];
-    editor.setSelectionRange(matchPos, matchPos + searchText.length);
-    editor.focus();
-    
-    // Update match counter
-    const counter = document.getElementById('editorMatchCount');
-    counter.textContent = `${currentMatchIndex['editor'] + 1} of ${matches.length}`;
-    
-    // Scroll to the selection in textarea - use a more reliable method
-    setTimeout(() => {
-        const textBeforeMatch = editor.value.substring(0, matchPos);
-        const lines = textBeforeMatch.split('\n');
-        const lineNumber = lines.length - 1;
-        const computedStyle = getComputedStyle(editor);
-        const lineHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.2 || 16;
-        const targetScrollTop = lineNumber * lineHeight - (editor.clientHeight / 2);
-        editor.scrollTop = Math.max(0, targetScrollTop);
-    }, 10);
 }
 
 function findInLog(searchText, direction = 1) {
@@ -858,42 +830,22 @@ function escapeRegex(string) {
 }
 
 function findNext(pane) {
-    const input = document.getElementById(pane === 'editor' ? 'editorSearchInput' : 'logSearchInput');
-    const searchText = input.value.trim();
-    if(!searchText) return;
-    
-    if(pane === 'editor') {
-        findInEditor(searchText, 1);
-    } else {
-        findInLog(searchText, 1);
+    if (pane === 'log') {
+        const input = document.getElementById('logSearchInput');
+        const searchText = input.value.trim();
+        if(searchText) findInLog(searchText, 1);
     }
 }
 
 function findPrev(pane) {
-    const input = document.getElementById(pane === 'editor' ? 'editorSearchInput' : 'logSearchInput');
-    const searchText = input.value.trim();
-    if(!searchText) return;
-    
-    if(pane === 'editor') {
-        findInEditor(searchText, -1);
-    } else {
-        findInLog(searchText, -1);
+    if (pane === 'log') {
+        const input = document.getElementById('logSearchInput');
+        const searchText = input.value.trim();
+        if(searchText) findInLog(searchText, -1);
     }
 }
 
-// Ctrl+F handlers for both panes
-editor.addEventListener('keydown', e => {
-    // Allow standard undo/redo
-    if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
-        return; // Let browser handle undo/redo
-    }
-    
-    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-        e.preventDefault();
-        openSearch('editor');
-    }
-});
-
+// Ctrl+F handler for log (editor uses built-in CodeMirror search)
 log.addEventListener('keydown', e => {
     if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
@@ -901,30 +853,7 @@ log.addEventListener('keydown', e => {
     }
 });
 
-// Search input handlers
-document.getElementById('editorSearchInput').addEventListener('keydown', e => {
-    if(e.key === 'Enter') {
-        e.preventDefault();
-        if(e.shiftKey) {
-            findPrev('editor');
-        } else {
-            findNext('editor');
-        }
-    } else if(e.key === 'Escape') {
-        closeSearch('editor');
-    }
-});
-
-document.getElementById('editorSearchInput').addEventListener('input', e => {
-    const searchText = e.target.value.trim();
-    if(searchText) {
-        currentMatches['editor'] = null; // Reset to trigger new search
-        findInEditor(searchText, 1);
-    } else {
-        clearHighlights('editor');
-    }
-});
-
+// Search input handlers (log only, editor uses CodeMirror's built-in search)
 document.getElementById('logSearchInput').addEventListener('keydown', e => {
     if(e.key === 'Enter') {
         e.preventDefault();
@@ -1111,12 +1040,10 @@ if(window.api?.onSOQLProgress) {
 }
 
 // Ctrl+E handler supporting multi-line SOQL separated by blank lines
-editor.addEventListener("keydown",async e=>{
+document.addEventListener("keydown",async e=>{
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='e'){
         e.preventDefault(); if(!window.api){ alert("Error: API not loaded."); return; }
-
-        // Close autocomplete if open
-        hideAutocomplete();
+        if(!editorView) return;
 
         // Check if environment is selected
         const envSelector = document.getElementById('envSelector');
@@ -1129,8 +1056,8 @@ editor.addEventListener("keydown",async e=>{
             return;
         }
 
-        const text = editor.value;
-        const cursorPos = editor.selectionStart;
+        const text = editorView.state.doc.toString();
+        const cursorPos = editorView.state.selection.main.head;
 
         // Find the block containing the cursor
         const lines = text.split('\n');
@@ -1173,8 +1100,10 @@ editor.addEventListener("keydown",async e=>{
         if(!targetBlock) return;
 
         // Highlight the block being executed
-        editor.setSelectionRange(blockStart, blockEnd);
-        editor.focus();
+        editorView.dispatch({
+            selection: { anchor: blockStart, head: blockEnd }
+        });
+        editorView.focus();
 
         logContent.innerHTML='';
         currentTable = null;
@@ -1196,7 +1125,6 @@ editor.addEventListener("keydown",async e=>{
         }, 100);
         
         document.body.style.cursor = 'wait';
-        editor.style.cursor = 'wait';
         try{
             const soqlKeywords=/^(SELECT|UPDATE|DELETE|INSERT|UPSERT|MERGE)\b/i;
             if(soqlKeywords.test(targetBlock)){
@@ -1279,7 +1207,6 @@ editor.addEventListener("keydown",async e=>{
         document.getElementById('stopQueryBtn').style.display = 'none';
         currentQueryId = null;
         document.body.style.cursor = 'default';
-        editor.style.cursor = 'text';
         logContent.scrollTop = 0;
     }
 });
@@ -1697,7 +1624,9 @@ function toggleFilters() {
 // ===== AUTOCOMPLETE FUNCTIONS =====
 
 // Fetch and cache all SObjects
-async function fetchSObjects() {
+// Fetch and cache SObjects list
+// Exposed globally for CodeMirror autocomplete
+window.fetchSObjects = async function() {
     if (sobjectsCache) return sobjectsCache;
     try {
         const result = await window.api.describeGlobal();
@@ -1715,15 +1644,31 @@ async function fetchSObjects() {
 }
 
 // Fetch and cache fields for a specific object
-async function fetchObjectFields(objectName) {
-    if (objectFieldsCache[objectName]) return objectFieldsCache[objectName];
+// Exposed globally for CodeMirror autocomplete
+window.fetchObjectFields = async function(objectName) {
+    // Normalize to title case for cache lookup
+    const normalizedName = objectName.charAt(0).toUpperCase() + objectName.slice(1).toLowerCase();
+    
+    if (objectFieldsCache[normalizedName]) return objectFieldsCache[normalizedName];
     try {
-        const result = await window.api.describeObject(objectName);
-        objectFieldsCache[objectName] = result.fields || [];
-        console.log('Cached', objectFieldsCache[objectName].length, 'fields for', objectName);
-        return objectFieldsCache[objectName];
+        const result = await window.api.describeObject(normalizedName);
+        
+        // Process fields to identify relationships
+        const processedFields = (result.fields || []).map(field => {
+            const isRelationship = field.type === 'reference' && field.relationshipName;
+            return {
+                ...field,
+                isRelationship: isRelationship,
+                relationshipName: field.relationshipName || null,
+                referenceTo: field.referenceTo || []
+            };
+        });
+        
+        objectFieldsCache[normalizedName] = processedFields;
+        console.log('Cached', processedFields.length, 'fields for', normalizedName);
+        return processedFields;
     } catch (error) {
-        console.error('Error fetching fields for', objectName, ':', error);
+        console.error('Error fetching fields for', normalizedName, ':', error);
         // Check if it's a config error
         if (error.message && error.message.includes('No config selected')) {
             showEnvironmentReminder();
@@ -1750,7 +1695,8 @@ function showEnvironmentReminder() {
 }
 
 // Parse query context to determine what to suggest
-function getAutocompletContext(text, cursorPos) {
+// Exposed globally for CodeMirror autocomplete
+window.getAutocompleteContext = function(text, cursorPos) {
     // Get text before and after cursor
     const textBeforeCursor = text.substring(0, cursorPos);
     const textAfterCursor = text.substring(cursorPos);
@@ -1820,10 +1766,12 @@ function getAutocompletContext(text, cursorPos) {
     }
     
     // ===== RELATIONSHIP FIELD DETECTION =====
-    // Check if typing a relationship field (e.g., Account.Name)
+    // Check if typing a relationship field (e.g., Account.Name or Account.Owner.Name)
     
     if (currentWord.includes('.')) {
         const parts = currentWord.split('.');
+        
+        // Single level: Account.Name
         if (parts.length === 2) {
             const relationshipName = parts[0];
             const fieldPrefix = parts[1];
@@ -1837,6 +1785,16 @@ function getAutocompletContext(text, cursorPos) {
                     prefix: fieldPrefix
                 };
             }
+        }
+        
+        // Multi-level: Account.Owner.Name (need to traverse the relationship chain)
+        if (parts.length > 2 && objectName) {
+            return {
+                type: 'multi-relationship-field',
+                baseObjectName: objectName,
+                relationshipPath: parts.slice(0, -1), // All parts except the last
+                prefix: parts[parts.length - 1] // Last part is the prefix
+            };
         }
     }
     
@@ -1911,388 +1869,44 @@ function getAutocompletContext(text, cursorPos) {
     return null;
 }
 
-// Show autocomplete dropdown with suggestions
-function showAutocomplete(suggestions, prefix, isField = false) {
-    const dropdown = document.getElementById('autocomplete');
-    const editor = document.getElementById('editor');
-    
-    if (!suggestions || suggestions.length === 0) {
-        hideAutocomplete();
-        return;
-    }
-    
-    // For fields, also include relationship names as separate suggestions
-    let allSuggestions = [...suggestions];
-    if (isField) {
-        const seenRelationships = new Set();
-        suggestions.forEach(field => {
-            // Only add relationship names from lookup/reference fields
-            if (field.type === 'reference' && field.relationshipName && 
-                field.referenceTo && field.referenceTo.length > 0 &&
-                !seenRelationships.has(field.relationshipName)) {
-                
-                seenRelationships.add(field.relationshipName);
-                
-                // Add relationship name as a separate suggestion
-                allSuggestions.push({
-                    name: field.relationshipName,
-                    label: `${field.label} relationship`,
-                    type: 'relationship',
-                    referenceTo: field.referenceTo,
-                    isRelationship: true
-                });
-            }
-        });
-    }
-    
-    // Filter suggestions by prefix (partial match anywhere in the name)
-    const filtered = allSuggestions.filter(item => {
-        const name = item.name;
-        return name.toLowerCase().includes(prefix.toLowerCase());
-    });
-    
-    if (filtered.length === 0) {
-        hideAutocomplete();
-        return;
-    }
-    
-    // Sort fields by priority
-    if (isField) {
-        filtered.sort((a, b) => {
-            const lowerPrefix = prefix.toLowerCase();
-            const aStartsWith = a.name.toLowerCase().startsWith(lowerPrefix);
-            const bStartsWith = b.name.toLowerCase().startsWith(lowerPrefix);
-            
-            // Prefix matches come first
-            if (aStartsWith && !bStartsWith) return -1;
-            if (!aStartsWith && bStartsWith) return 1;
-            
-            const getPriority = (field) => {
-                const name = field.name;
-                // Top tier: Id, Name
-                if (name === 'Id' || name === 'Name') return 1;
-                // Second tier: audit fields, ownership
-                if (['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 
-                     'SystemModstamp', 'OwnerId', 'RecordTypeId', 'IsDeleted'].includes(name)) return 2;
-                // Third tier: everything else
-                if (!field.isRelationship) return 3;
-                // Bottom tier: Relationship names (for traversal like Account, Owner)
-                return 4;
-            };
-            
-            const priorityA = getPriority(a);
-            const priorityB = getPriority(b);
-            
-            if (priorityA !== priorityB) {
-                return priorityA - priorityB;
-            }
-            
-            // Within same priority, sort alphabetically
-            return a.name.localeCompare(b.name);
-        });
-    } else {
-        // Sort objects - prefix matches first, then alphabetically
-        filtered.sort((a, b) => {
-            const lowerPrefix = prefix.toLowerCase();
-            const aStartsWith = a.name.toLowerCase().startsWith(lowerPrefix);
-            const bStartsWith = b.name.toLowerCase().startsWith(lowerPrefix);
-            
-            // Prefix matches come first
-            if (aStartsWith && !bStartsWith) return -1;
-            if (!aStartsWith && bStartsWith) return 1;
-            
-            // Within same match type, sort alphabetically
-            return a.name.localeCompare(b.name);
-        });
-    }
-    
-    autocompleteItems = filtered;
-    autocompleteSelectedIndex = 0;
-    
-    // Build dropdown HTML
-    dropdown.innerHTML = filtered.map((item, index) => {
-        let label, hint;
-        if (isField) {
-            // For fields, show API name as main, always show friendly label as hint
-            label = item.name;
-            if (item.isRelationship) {
-                // For relationship names, add indicator and show related object
-                const relatedObj = item.referenceTo ? item.referenceTo[0] : '';
-                hint = ` <span class="autocomplete-relationship">→ ${relatedObj}</span>`;
-            } else {
-                hint = item.label ? `<span class="autocomplete-hint">${item.label}</span>` : '';
-            }
-        } else {
-            // For objects, show API name as main, always show friendly label as hint
-            label = item.name;
-            hint = item.label ? `<span class="autocomplete-hint">${item.label}</span>` : '';
-        }
-        return `<div class="autocomplete-item${index === 0 ? ' selected' : ''}" data-index="${index}">${label}${hint}</div>`;
-    }).join('');
-    
-    // Position dropdown below cursor
-    const coords = getCaretCoordinates(editor);
-    dropdown.style.left = coords.left + 'px';
-    dropdown.style.top = coords.top + 'px';
-    dropdown.style.display = 'block';
-    autocompleteVisible = true;
-    
-    // Adjust position if dropdown would go off-screen
-    const dropdownRect = dropdown.getBoundingClientRect();
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    
-    // Check if dropdown extends beyond right edge
-    if (dropdownRect.right > viewportWidth) {
-        dropdown.style.left = (viewportWidth - dropdownRect.width - 10) + 'px';
-    }
-    
-    // Check if dropdown extends beyond bottom edge
-    if (dropdownRect.bottom > viewportHeight) {
-        // Position above cursor instead
-        dropdown.style.top = (coords.top - dropdownRect.height - 20) + 'px';
-    }
-    
-    // Add click handlers
-    dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
-        item.addEventListener('click', () => {
-            const index = parseInt(item.dataset.index);
-            selectAutocompleteItem(index);
-        });
-    });
-}
-
-// Hide autocomplete dropdown
-function hideAutocomplete() {
-    const dropdown = document.getElementById('autocomplete');
-    dropdown.style.display = 'none';
-    dropdown.innerHTML = '';
-    autocompleteVisible = false;
-    autocompleteSelectedIndex = -1;
-    autocompleteItems = [];
-}
-
-// Select an autocomplete item
-function selectAutocompleteItem(index) {
-    if (index < 0 || index >= autocompleteItems.length) return;
-    
-    const editor = document.getElementById('editor');
-    const cursorPos = editor.selectionStart;
-    const text = editor.value;
-    
-    // Find the start of the current word
-    const beforeCursor = text.substring(0, cursorPos);
-    const wordMatch = beforeCursor.match(/\w+$/);
-    const wordStart = wordMatch ? cursorPos - wordMatch[0].length : cursorPos;
-    
-    // Select the current word so we can replace it
-    editor.selectionStart = wordStart;
-    editor.selectionEnd = cursorPos;
-    editor.focus();
-    
-    // Insert the selected name, which preserves undo history
-    const selectedName = autocompleteItems[index].name;
-    document.execCommand('insertText', false, selectedName);
-    
-    hideAutocomplete();
-}
-
-// Move selection in autocomplete dropdown
-function moveAutocompleteSelection(direction) {
-    if (!autocompleteVisible || autocompleteItems.length === 0) return;
-    
-    // Update index
-    autocompleteSelectedIndex += direction;
-    if (autocompleteSelectedIndex < 0) autocompleteSelectedIndex = autocompleteItems.length - 1;
-    if (autocompleteSelectedIndex >= autocompleteItems.length) autocompleteSelectedIndex = 0;
-    
-    // Update UI
-    const dropdown = document.getElementById('autocomplete');
-    const items = dropdown.querySelectorAll('.autocomplete-item');
-    items.forEach((item, index) => {
-        if (index === autocompleteSelectedIndex) {
-            item.classList.add('selected');
-            item.scrollIntoView({ block: 'nearest' });
-        } else {
-            item.classList.remove('selected');
-        }
-    });
-}
-
-// Get cursor coordinates in textarea for positioning dropdown
-function getCaretCoordinates(element) {
-    const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
-    const lineHeight = parseInt(style.lineHeight) || 20;
-    const paddingTop = parseInt(style.paddingTop) || 0;
-    const paddingLeft = parseInt(style.paddingLeft) || 0;
-    
-    // Create a mirror div to measure text position
-    const mirror = document.createElement('div');
-    mirror.style.position = 'absolute';
-    mirror.style.visibility = 'hidden';
-    mirror.style.whiteSpace = 'pre-wrap';
-    mirror.style.wordWrap = 'break-word';
-    mirror.style.font = style.font;
-    mirror.style.padding = style.padding;
-    mirror.style.width = rect.width + 'px';
-    document.body.appendChild(mirror);
-    
-    // Get text before cursor
-    const textBeforeCursor = element.value.substring(0, element.selectionStart);
-    mirror.textContent = textBeforeCursor;
-    
-    // Add a span at the cursor position
-    const span = document.createElement('span');
-    span.textContent = '|';
-    mirror.appendChild(span);
-    
-    const spanRect = span.getBoundingClientRect();
-    const mirrorRect = mirror.getBoundingClientRect();
-    
-    document.body.removeChild(mirror);
-    
-    return {
-        left: rect.left + (spanRect.left - mirrorRect.left) + paddingLeft,
-        top: rect.top + (spanRect.top - mirrorRect.top) + paddingTop + lineHeight
-    };
-}
-
-// Handle autocomplete trigger on editor input
-async function handleEditorInput(event) {
-    // Check if autocomplete is enabled
-    if (!autocompleteEnabled) {
-        hideAutocomplete();
-        return;
-    }
-    
-    const editor = document.getElementById('editor');
-    const cursorPos = editor.selectionStart;
-    const text = editor.value;
-    
-    // Get context
-    const context = getAutocompletContext(text, cursorPos);
-    
-    if (!context) {
-        hideAutocomplete();
-        return;
-    }
-    
-    // Fetch suggestions based on context
-    if (context.type === 'object') {
-        const sobjects = await fetchSObjects();
-        showAutocomplete(sobjects, context.prefix, false);
-    } else if (context.type === 'field') {
-        const fields = await fetchObjectFields(context.objectName);
-        showAutocomplete(fields, context.prefix, true);
-    } else if (context.type === 'relationship-field') {
-        // Resolve the related object from the relationship field
-        const baseFields = await fetchObjectFields(context.baseObjectName);
-        
-        // Find the relationship field
-        const relationshipField = baseFields.find(f => 
-            f.relationshipName && f.relationshipName.toLowerCase() === context.relationshipName.toLowerCase()
-        );
-        
-        if (relationshipField && relationshipField.referenceTo && relationshipField.referenceTo.length > 0) {
-            const relatedObjectName = relationshipField.referenceTo[0];
-            const relatedFields = await fetchObjectFields(relatedObjectName);
-            showAutocomplete(relatedFields, context.prefix, true);
-        } else {
-            hideAutocomplete();
-        }
-    }
-}
-
-// Handle keyboard navigation in autocomplete
-function handleEditorKeydown(event) {
-    // Allow standard undo/redo
-    if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
-        return; // Let browser handle undo/redo
-    }
-    
-    if (autocompleteVisible) {
-        if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            moveAutocompleteSelection(1);
-            return;
-        }
-        if (event.key === 'ArrowUp') {
-            event.preventDefault();
-            moveAutocompleteSelection(-1);
-            return;
-        }
-        if (event.key === 'PageDown') {
-            event.preventDefault();
-            moveAutocompleteSelection(5);
-            return;
-        }
-        if (event.key === 'PageUp') {
-            event.preventDefault();
-            moveAutocompleteSelection(-5);
-            return;
-        }
-        if (event.key === 'Enter' || event.key === 'Tab') {
-            event.preventDefault();
-            selectAutocompleteItem(autocompleteSelectedIndex);
-            return;
-        }
-        if (event.key === ',') {
-            event.preventDefault();
-            selectAutocompleteItem(autocompleteSelectedIndex);
-            // Insert comma after selection
-            setTimeout(() => {
-                document.execCommand('insertText', false, ',');
-            }, 0);
-            return;
-        }
-        if (event.key === '.') {
-            // Only allow period completion on relationship fields
-            const selectedItem = autocompleteItems[autocompleteSelectedIndex];
-            if (selectedItem && selectedItem.isRelationship) {
-                event.preventDefault();
-                selectAutocompleteItem(autocompleteSelectedIndex);
-                // Insert period after selection
-                setTimeout(() => {
-                    document.execCommand('insertText', false, '.');
-                }, 0);
-                return;
-            }
-            // Otherwise, let the period character pass through normally (hide autocomplete)
-            hideAutocomplete();
-            return;
-        }
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            hideAutocomplete();
-            return;
-        }
-    }
-}
-
 // Initialize autocomplete
 function initAutocomplete() {
-    const editor = document.getElementById('editor');
-    editor.addEventListener('input', handleEditorInput);
-    editor.addEventListener('keydown', handleEditorKeydown);
-    
     // Restore autocomplete enabled state from localStorage
     const checkbox = document.getElementById('autocompleteEnabled');
-    checkbox.checked = autocompleteEnabled;
+    if (checkbox) {
+        checkbox.checked = autocompleteEnabled;
+    }
     
-    // Hide autocomplete when clicking outside
-    document.addEventListener('click', (event) => {
-        if (!event.target.closest('#autocomplete') && event.target.id !== 'editor') {
-            hideAutocomplete();
+    // Pre-fetch fields for objects found in current editor content
+    if (editorView) {
+        const text = editorView.state.doc.toString();
+        const fromMatches = text.matchAll(/\bFROM\s+(\w+)/gi);
+        const objectNames = new Set();
+        for (const match of fromMatches) {
+            objectNames.add(match[1]);
         }
-    });
+        
+        // Fetch fields in background for each object
+        objectNames.forEach(objName => {
+            window.fetchObjectFields(objName).catch(err => 
+                console.log('Background fetch failed for', objName, ':', err.message)
+            );
+        });
+    }
 }
 
 document.addEventListener('DOMContentLoaded',()=>{ 
-    if(window.api) {
-        loadEnvironments();
-        initAutocomplete();
+    // Initialize CodeMirror editor
+    if (window.createCodeMirrorEditor) {
+        const editorContainer = document.getElementById("editor");
+        editorView = window.createCodeMirrorEditor(editorContainer);
+    } else {
+        console.error('CodeMirror editor not available');
     }
+    
+    // Load environments
+    loadEnvironments();
+    initAutocomplete();
 });
 </script>
 </body>
