@@ -23,10 +23,11 @@ tr:nth-child(even) { background:#f9f9f9; }
 tr:hover { background:#fffae6; }
 .keyword { color:#d73a49; font-weight:bold; }
 
-#results-header { display:flex; justify-content:flex-end; padding:4px 8px; border-bottom:1px solid #ccc; background:#f5f5f5; }
+#results-header { display:flex; justify-content:flex-end; align-items:center; gap:8px; padding:4px 8px; border-bottom:1px solid #ccc; background:#f5f5f5; }
 #copyResultsBtn { padding:4px 8px; font-size:12px; cursor:pointer; }
-#stopQueryBtn { padding:4px 8px; font-size:12px; cursor:pointer; background:#dc3545; color:white; border:none; border-radius:4px; margin-right:8px; display:none; }
+#stopQueryBtn { padding:4px 8px; font-size:12px; cursor:pointer; background:#dc3545; color:white; border:none; border-radius:4px; display:none; }
 #stopQueryBtn:hover { background:#c82333; }
+#exportJsonBtn, #exportCsvBtn { padding:4px 8px; font-size:12px; cursor:pointer; }
 
 .search-box { position:absolute; top:10px; right:10px; background:#fff; border:2px solid #0066cc; border-radius:4px; padding:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:1000; display:none; }
 .search-box input { border:1px solid #ccc; padding:4px; margin-right:4px; font-size:12px; }
@@ -49,7 +50,7 @@ tr:hover { background:#fffae6; }
 <div id="toolbar">
     <button onclick="saveSession()">💾 Save Session</button>
     <button onclick="document.getElementById('fileInput').click()">📂 Load Session</button>
-    <input type="file" id="fileInput" accept=".json" onchange="loadSession(event)">
+    <input type="file" id="fileInput" accept=".txt,.soql" onchange="loadSession(event)">
     
     <select id="envSelector" onchange="changeEnvironment()" style="margin-left:20px; padding:6px 12px; border-radius:4px; border:1px solid #ccc;">
         <option value="">Select Environment</option>
@@ -79,6 +80,8 @@ tr:hover { background:#fffae6; }
     <div id="results-header">
         <span id="resultsCount" style="font-size:14px; font-family:monospace; color:#666; margin-right:auto;"></span>
         <button id="stopQueryBtn" onclick="stopQuery()">⏹ Stop Query</button>
+        <button id="exportJsonBtn" onclick="exportToJSON()" tabindex="-1" style="display:none;">📄 Export JSON</button>
+        <button id="exportCsvBtn" onclick="exportToCSV()" tabindex="-1" style="display:none;">📊 Export CSV</button>
         <button id="copyResultsBtn" tabindex="-1">📋 Copy Results</button>
     </div>
     <div id="log" tabindex="0">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
@@ -103,6 +106,9 @@ let autocompleteSelectedIndex = -1;
 let autocompleteItems = [];
 let autocompleteEnabled = localStorage.getItem('autocompleteEnabled') !== 'false'; // Default true
 
+// Store current result data for export
+let currentResultData = null;
+
 // Toggle autocomplete feature
 function toggleAutocomplete() {
     autocompleteEnabled = document.getElementById('autocompleteEnabled').checked;
@@ -110,6 +116,81 @@ function toggleAutocomplete() {
     if (!autocompleteEnabled) {
         hideAutocomplete();
     }
+}
+
+// Export results to JSON
+function exportToJSON() {
+    if (!currentResultData) return;
+    
+    const jsonStr = JSON.stringify(currentResultData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const now = new Date();
+    const timestamp = now.getFullYear() + '-' + 
+        String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(now.getDate()).padStart(2, '0') + 'T' + 
+        String(now.getHours()).padStart(2, '0') + '-' + 
+        String(now.getMinutes()).padStart(2, '0') + '-' + 
+        String(now.getSeconds()).padStart(2, '0');
+    a.download = `export_${timestamp}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// Export results to CSV
+function exportToCSV() {
+    if (!currentResultData) return;
+    
+    const records = currentResultData.records || currentResultData;
+    if (!records || records.length === 0) return;
+    
+    // Get headers (excluding attributes)
+    const headers = Object.keys(records[0]).filter(h => h !== 'attributes');
+    
+    // Build CSV
+    let csv = headers.join(',') + '\n';
+    
+    records.forEach(record => {
+        const row = headers.map(header => {
+            let value = record[header];
+            
+            // Handle null/undefined
+            if (value === null || value === undefined) return '';
+            
+            // Handle nested objects (like relationships)
+            if (typeof value === 'object') {
+                value = JSON.stringify(value);
+            }
+            
+            // Convert to string and escape
+            value = String(value);
+            
+            // Escape quotes and wrap in quotes if contains comma, quote, or newline
+            if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+                value = '"' + value.replace(/"/g, '""') + '"';
+            }
+            
+            return value;
+        });
+        csv += row.join(',') + '\n';
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const now = new Date();
+    const timestamp = now.getFullYear() + '-' + 
+        String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(now.getDate()).padStart(2, '0') + 'T' + 
+        String(now.getHours()).padStart(2, '0') + '-' + 
+        String(now.getMinutes()).padStart(2, '0') + '-' + 
+        String(now.getSeconds()).padStart(2, '0');
+    a.download = `export_${timestamp}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 // Highlight SOQL keywords
@@ -302,21 +383,25 @@ if (window.api?.onOAuthError) {
 
 // Session save/load
 function saveSession() {
-    const blob=new Blob([JSON.stringify({queries:editor.value,timestamp:new Date().toISOString(),version:"1.0"},null,2)],{type:'application/json'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`soql-session-${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.json`; a.click(); URL.revokeObjectURL(a.href);
+    const now = new Date();
+    const timestamp = now.getFullYear() + '-' + 
+        String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(now.getDate()).padStart(2, '0') + 'T' + 
+        String(now.getHours()).padStart(2, '0') + '-' + 
+        String(now.getMinutes()).padStart(2, '0') + '-' + 
+        String(now.getSeconds()).padStart(2, '0');
+    const blob=new Blob([editor.value],{type:'text/plain'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`soql-session-${timestamp}.txt`; a.click(); URL.revokeObjectURL(a.href);
 }
 function loadSession(e){
     const file=e.target.files[0]; if(!file) return;
     const reader=new FileReader();
     reader.onload=function(ev){
-        try{
-            const s=JSON.parse(ev.target.result);
-            if(s.queries) editor.value=s.queries;
-            log.innerHTML=''; const msg=document.createElement('div');
-            msg.className='log-line'; msg.style.background="#d4edda"; msg.style.color="#155724"; msg.style.padding="5px";
-            msg.textContent=`✅ Session loaded from ${s.timestamp ? new Date(s.timestamp).toLocaleString() : 'unknown date'}`;
-            log.appendChild(msg);
-        } catch(err){ alert(err.message); }
+        editor.value=ev.target.result;
+        log.innerHTML=''; const msg=document.createElement('div');
+        msg.className='log-line'; msg.style.background="#d4edda"; msg.style.color="#155724"; msg.style.padding="5px";
+        msg.textContent=`✅ Session loaded from ${file.name}`;
+        log.appendChild(msg);
     }; reader.readAsText(file); e.target.value='';
 }
 
@@ -901,6 +986,9 @@ editor.addEventListener("keydown",async e=>{
         const envSelector = document.getElementById('envSelector');
         if (!envSelector.value) {
             log.innerHTML = '';
+            currentResultData = null;
+            document.getElementById('exportJsonBtn').style.display = 'none';
+            document.getElementById('exportCsvBtn').style.display = 'none';
             showEnvironmentReminder();
             return;
         }
@@ -955,6 +1043,9 @@ editor.addEventListener("keydown",async e=>{
         log.innerHTML='';
         currentTable = null;
         currentTbody = null;
+        currentResultData = null;
+        document.getElementById('exportJsonBtn').style.display = 'none';
+        document.getElementById('exportCsvBtn').style.display = 'none';
         currentQueryId = 'query_' + Date.now();
         queryStartTime = Date.now();
         document.getElementById('resultsCount').textContent = '';
@@ -983,6 +1074,31 @@ editor.addEventListener("keydown",async e=>{
                     errEl.style.color = '#856404';
                     errEl.innerHTML = '⏹ Query was stopped';
                     log.appendChild(errEl);
+                    
+                    // If we have partial results from pagination, keep them exportable
+                    if (currentTable && currentTbody && currentTbody.children.length > 0) {
+                        // Extract partial data from the rendered table for export
+                        const rows = Array.from(currentTbody.children);
+                        const headerCells = Array.from(currentTable.querySelector('thead tr').children);
+                        const headers = headerCells.slice(1).map(th => th.textContent); // Skip row number column
+                        
+                        const partialRecords = rows.map(row => {
+                            const record = {};
+                            const cells = Array.from(row.children).slice(1); // Skip row number column
+                            headers.forEach((header, idx) => {
+                                record[header] = cells[idx].textContent;
+                            });
+                            return record;
+                        });
+                        
+                        currentResultData = { records: partialRecords, totalSize: partialRecords.length };
+                        document.getElementById('exportJsonBtn').style.display = 'inline-block';
+                        document.getElementById('exportCsvBtn').style.display = 'inline-block';
+                        
+                        const elapsedMs = queryStartTime ? Date.now() - queryStartTime : 0;
+                        const elapsedSec = (elapsedMs / 1000).toFixed(2);
+                        document.getElementById('resultsCount').textContent = `Results: ${partialRecords.length} (partial, ${elapsedSec}s)`;
+                    }
                 } else {
                     renderResult(result);
                 }
@@ -1027,6 +1143,18 @@ editor.addEventListener("keydown",async e=>{
 function renderResult(result) {
     const elapsedMs = queryStartTime ? Date.now() - queryStartTime : 0;
     const elapsedSec = (elapsedMs / 1000).toFixed(2);
+    
+    // Store result data for export
+    currentResultData = result;
+    
+    // Show export buttons if we have exportable data
+    // JSON export: always available if we have any result
+    const hasAnyData = (result && typeof result === 'object');
+    document.getElementById('exportJsonBtn').style.display = hasAnyData ? 'inline-block' : 'none';
+    
+    // CSV export: only available for records (SOQL results)
+    const hasRecords = (result && (result.records || Array.isArray(result)));
+    document.getElementById('exportCsvBtn').style.display = hasRecords ? 'inline-block' : 'none';
     
     // If table was already rendered progressively, just update the final counter
     if (currentTable && currentTbody) {
