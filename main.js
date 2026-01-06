@@ -346,9 +346,12 @@ const WINDOW_OFFSET = 30;
 // Open a new window with REST API result
 ipcMain.handle('open-result-window', async (event, data) => {
     try {
-        // Calculate cascading position
-        const x = lastWindowPosition.x;
-        const y = lastWindowPosition.y;
+        // Get main window bounds to position relative to it
+        const mainBounds = mainWindow.getBounds();
+        
+        // Calculate cascading position relative to main window
+        const x = mainBounds.x + lastWindowPosition.x;
+        const y = mainBounds.y + lastWindowPosition.y;
         
         // Update position for next window (cascade down-right)
         lastWindowPosition.x += WINDOW_OFFSET;
@@ -365,6 +368,7 @@ ipcMain.handle('open-result-window', async (event, data) => {
             x: x,
             y: y,
             frame: false,
+            parent: mainWindow,
             webPreferences: {
                 contextIsolation: false,
                 nodeIntegration: true,

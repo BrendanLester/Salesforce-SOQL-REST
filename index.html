@@ -43,7 +43,7 @@ body { margin:0; height:100vh; display:flex; flex-direction:column; font-family:
 #toolbar button:hover { background:#0052a3; }
 #toolbar input[type="file"] { display:none; }
 #top, #bottom { flex:1; overflow:hidden; }
-#splitter { height:5px; background:#888; cursor:row-resize; }
+#splitter { height:5px; background:#888; cursor:row-resize; position:relative; z-index:100; flex-shrink:0; }
 #editor { width:100%; height:100%; }
 #log { padding:2px 2px 8px 2px; font-family:monospace; font-size:14px; overflow:hidden; flex:1; outline:none; position:relative; }
 #log:focus { box-shadow: inset 0 0 0 2px #0066cc; }
@@ -597,6 +597,30 @@ document.addEventListener("mouseup", () => {
     if (!isDragging) return;
     isDragging = false;
     document.body.style.cursor = "default";
+});
+
+// Handle window resize to adjust panel heights proportionally
+window.addEventListener("resize", () => {
+    // Only adjust if panels have fixed heights (splitter has been used)
+    if (topDiv.style.height && bottomDiv.style.height) {
+        const toolbarHeight = document.getElementById("toolbar").offsetHeight;
+        const totalHeight = window.innerHeight - toolbarHeight - splitter.offsetHeight;
+        
+        // Get current heights
+        const currentTopHeight = parseInt(topDiv.style.height);
+        const currentBottomHeight = parseInt(bottomDiv.style.height);
+        const currentTotal = currentTopHeight + currentBottomHeight;
+        
+        // Calculate proportions
+        const topRatio = currentTopHeight / currentTotal;
+        
+        // Apply proportional heights
+        const newTopHeight = Math.max(50, totalHeight * topRatio);
+        const newBottomHeight = Math.max(50, totalHeight - newTopHeight);
+        
+        topDiv.style.height = `${newTopHeight}px`;
+        bottomDiv.style.height = `${newBottomHeight}px`;
+    }
 });
 
 // Initialize CodeMirror editor
