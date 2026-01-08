@@ -244,7 +244,10 @@ window.createCodeMirrorEditor = function(parent) {
         override: [soqlAutocompletion],
         activateOnTyping: true,
         closeOnBlur: true,
-        maxRenderedOptions: 500
+        maxRenderedOptions: 500,
+        optionClass: (completion) => {
+          return completion.type === "namespace" ? "cm-completion-relationship" : "";
+        }
       }),
       syntaxHighlighting(customHighlightStyle),
       keymap.of([
@@ -308,6 +311,9 @@ window.createCodeMirrorEditor = function(parent) {
         },
         "&.cm-focused .cm-selectionBackground": {
           backgroundColor: "#ffeb3b !important"
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete": {
+          maxHeight: "none !important"
         }
       }),
       EditorView.theme({
@@ -324,11 +330,52 @@ window.createCodeMirrorEditor = function(parent) {
         ".cm-comment": {
           color: "#9ccc9c"
         },
-        ".cm-tooltip-autocomplete": {
-          maxHeight: "400px"
+        ".cm-tooltip.cm-tooltip-autocomplete": {
+          minHeight: "50px",
+          minWidth: "150px",
+          width: "400px",
+          height: "300px",
+          overflow: "hidden !important",
+          display: "flex !important",
+          flexDirection: "column !important",
+          position: "fixed !important"
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-above": {
+          maxHeight: "none !important"
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-below": {
+          maxHeight: "none !important"
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+          flex: "1 1 auto !important",
+          overflow: "auto !important",
+          minHeight: "0 !important",
+          maxHeight: "none !important",
+          margin: "0 !important",
+          padding: "0 !important",
+          boxSizing: "border-box !important"
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete .cm-completionList": {
+          flex: "1 1 auto !important",
+          overflow: "auto !important",
+          minHeight: "0 !important",
+          maxHeight: "none !important",
+          boxSizing: "border-box !important",
+          padding: "0 !important"
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete .cm-completionList li": {
+          boxSizing: "border-box !important"
         },
         ".cm-completionIcon": {
           display: "none"
+        },
+        ".cm-completion-relationship": {
+          backgroundColor: "#e6f3ff",
+          borderLeft: "3px solid #0066cc",
+          paddingLeft: "8px"
+        },
+        ".cm-completion-relationship[aria-selected='true']": {
+          backgroundColor: "#0066cc !important"
         },
         ".cm-panel.cm-search": {
           background: "#fff",
