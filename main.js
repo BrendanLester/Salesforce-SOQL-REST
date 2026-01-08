@@ -388,7 +388,11 @@ ipcMain.handle('open-result-window', async (event, data) => {
         if (!global.resultWindowData) {
             global.resultWindowData = {};
         }
-        global.resultWindowData[windowId] = data;
+        // Store both data and conversion state
+        global.resultWindowData[windowId] = {
+            data: data.data || data, // Support both old and new format
+            convertUtcToLocal: data.convertUtcToLocal || false
+        };
         
         // Clean up when window is closed
         resultWindow.on('closed', () => {

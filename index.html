@@ -158,6 +158,10 @@ tr:hover { background:#fffae6; }
 <div id="bottom" style="background:#fff; display:flex; flex-direction:column; position:relative;">
     <div id="results-header">
         <span id="resultsCount" style="font-size:14px; font-family:monospace; color:#666; margin-right:auto;"></span>
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer; margin-right:8px;" title="Convert UTC datetime to local timezone">
+            <input type="checkbox" id="convertUtcCheckbox" onchange="toggleUtcConversion()" style="cursor:pointer;">
+            <span>Local Time</span>
+        </label>
         <button id="copyResultsBtn" tabindex="-1">📋 Copy</button>
         <button id="stopQueryBtn" onclick="stopQuery()">⏹ Stop Query</button>
         <button id="exportJsonBtn" onclick="exportToJSON()" tabindex="-1" style="display:none;">📄 Export JSON</button>
@@ -195,7 +199,110 @@ let currentSortDirection = 'asc';
 let columnFilters = {};
 let filtersVisible = false;
 
+// UTC to Local conversion state
+let convertUtcToLocal = false;
+let originalElapsedTime = null;
 
+// Detect if a string is an ISO 8601 UTC datetime
+function isUtcDateTime(value) {
+    if (typeof value !== 'string') return false;
+    // Match ISO 8601 formats (Salesforce uses these):
+    // 2024-01-08T12:34:56.000Z
+    // 2024-01-08T12:34:56Z
+    // 2024-01-08T12:34:56.000+0000
+    // 2024-01-08T12:34:56+0000
+    const isoDateRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?(Z|[+-]\d{4}|[+-]00:00)$/;
+    return isoDateRegex.test(value);
+}
+
+// Convert UTC datetime string to local datetime string
+function convertToLocalDateTime(utcString) {
+    try {
+        const date = new Date(utcString);
+        if (isNaN(date.getTime())) return utcString;
+        
+        // Format: 2026-01-06T19:37:22.000+0000 (same format, local time and timezone)
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+        
+        // Get timezone offset in format +0000 or -0500
+        const offset = -date.getTimezoneOffset();
+        const offsetHours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+        const offsetMinutes = String(Math.abs(offset) % 60).padStart(2, '0');
+        const offsetSign = offset >= 0 ? '+' : '-';
+        const timezoneStr = `${offsetSign}${offsetHours}${offsetMinutes}`;
+        
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${timezoneStr}`;
+    } catch {
+        return utcString;
+    }
+}
+
+// Toggle UTC to local datetime conversion
+function toggleUtcConversion() {
+    const checkbox = document.getElementById('convertUtcCheckbox');
+    convertUtcToLocal = checkbox.checked;
+    console.log('UTC conversion toggled:', convertUtcToLocal);
+    
+    // Re-render the table if data exists
+    if (currentResultData) {
+        console.log('Re-rendering with currentResultData:', currentResultData);
+        
+        // Show visual feedback
+        checkbox.disabled = true;
+        document.body.style.cursor = 'wait';
+        const resultsCount = document.getElementById('resultsCount');
+        const originalText = resultsCount.textContent;
+        resultsCount.textContent = convertUtcToLocal ? 'Converting to local time...' : 'Reverting to UTC...';
+        
+        // Use setTimeout to allow UI to update before heavy rendering
+        setTimeout(() => {
+            // Clear current table and re-render
+            logContent.innerHTML = '';
+            currentTable = null;
+            currentTbody = null;
+            renderResult(currentResultData, true);
+            
+            // Restore UI
+            checkbox.disabled = false;
+            document.body.style.cursor = '';
+            resultsCount.textContent = originalText;
+        }, 50);
+    } else {
+        console.log('No currentResultData to re-render');
+    }
+}
+
+// Recursively convert datetime values in an object or array
+function convertDatetimesInObject(obj) {
+    if (obj === null || obj === undefined) return obj;
+    
+    if (Array.isArray(obj)) {
+        return obj.map(item => convertDatetimesInObject(item));
+    }
+    
+    if (typeof obj === 'object') {
+        const newObj = {};
+        for (const key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                newObj[key] = convertDatetimesInObject(obj[key]);
+            }
+        }
+        return newObj;
+    }
+    
+    // If it's a string that looks like a datetime, convert it
+    if (typeof obj === 'string' && isUtcDateTime(obj)) {
+        return convertToLocalDateTime(obj);
+    }
+    
+    return obj;
+}
 
 // Toggle help modal
 function toggleHelp() {
@@ -368,6 +475,12 @@ async function loadEnvironments() {
 
 async function changeEnvironment() {
     const sel=document.getElementById('envSelector'); if(!sel.value) return;
+    
+    // Cancel any running query before switching
+    if (currentQueryId) {
+        await stopQuery();
+    }
+    
     try {
         const success = await window.api.setConfigFile(sel.value);
         if(success){
@@ -1080,12 +1193,13 @@ async function executeRestForId(objectType, idValue) {
         const path = `${objectType}/${idValue}`;
         const res = await window.api.executeREST(path);
         
-        // Open result in new window
-        await window.api.openResultWindow(res);
+        // Open result in new window with current conversion state
+        await window.api.openResultWindow({ data: res, convertUtcToLocal });
     } catch (err) {
         // Show error in new window
         await window.api.openResultWindow({
-            error: err.message || 'Failed to fetch record'
+            data: { error: err.message || 'Failed to fetch record' },
+            convertUtcToLocal
         });
     }
 }
@@ -1202,7 +1316,13 @@ if(window.api?.onSOQLProgress) {
                     if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
                     else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
                 } else {
-                    td.textContent = String(val);
+                    // Convert UTC datetime if checkbox is enabled
+                    const isDateTime = isUtcDateTime(val);
+                    const displayVal = (convertUtcToLocal && isDateTime) ? convertToLocalDateTime(val) : String(val);
+                    if (convertUtcToLocal && isDateTime) {
+                        console.log('Converting datetime:', val, '->', displayVal);
+                    }
+                    td.textContent = displayVal;
                     // Make Id fields clickable (Id, AccountId, OwnerId, etc.)
                     if (h.endsWith('Id') && val && val.length === 18) {
                         const objectType = getObjectTypeFromFieldName(h, rec);
@@ -1311,6 +1431,7 @@ document.addEventListener("keydown",async e=>{
         queryStartTime = Date.now();
         document.getElementById('resultsCount').textContent = '';
         document.getElementById('stopQueryBtn').style.display = 'inline-block';
+        document.getElementById('convertUtcCheckbox').disabled = true;
         
         // Start live timer to show execution progress
         queryTimerInterval = setInterval(() => {
@@ -1400,6 +1521,7 @@ document.addEventListener("keydown",async e=>{
         }
         
         document.getElementById('stopQueryBtn').style.display = 'none';
+        document.getElementById('convertUtcCheckbox').disabled = false;
         currentQueryId = null;
         document.body.style.cursor = 'default';
         logContent.scrollTop = 0;
@@ -1407,9 +1529,17 @@ document.addEventListener("keydown",async e=>{
 });
 
 // Render results helper
-function renderResult(result) {
-    const elapsedMs = queryStartTime ? Date.now() - queryStartTime : 0;
-    const elapsedSec = (elapsedMs / 1000).toFixed(2);
+function renderResult(result, isRerender = false) {
+    let elapsedSec;
+    if (isRerender && originalElapsedTime !== null) {
+        // Use preserved time when re-rendering
+        elapsedSec = originalElapsedTime;
+    } else {
+        // Calculate and store new elapsed time
+        const elapsedMs = queryStartTime ? Date.now() - queryStartTime : 0;
+        elapsedSec = (elapsedMs / 1000).toFixed(2);
+        originalElapsedTime = elapsedSec;
+    }
     
     // Store result data for export
     currentResultData = result;
@@ -1451,7 +1581,9 @@ function renderResult(result) {
 
     if (!result.records && !Array.isArray(result)) {
         const pre = document.createElement("pre");
-        pre.textContent = JSON.stringify(result, null, 2);
+        // Apply datetime conversion if enabled
+        const displayData = convertUtcToLocal ? convertDatetimesInObject(result) : result;
+        pre.textContent = JSON.stringify(displayData, null, 2);
         logContent.appendChild(pre);
         document.getElementById('resultsCount').textContent = `Results: JSON Response (${elapsedSec}s)`;
         return;
@@ -1564,7 +1696,13 @@ function renderResult(result) {
                 if (val.Id && (val.Name || val.name)) td.textContent = val.Name || val.name;
                 else { try { td.textContent = JSON.stringify(val); } catch { td.textContent = String(val); } }
             } else {
-                td.textContent = String(val);
+                // Convert UTC datetime if checkbox is enabled
+                const isDateTime = isUtcDateTime(val);
+                const displayVal = (convertUtcToLocal && isDateTime) ? convertToLocalDateTime(val) : String(val);
+                if (convertUtcToLocal && isDateTime) {
+                    console.log('Converting datetime (renderResult):', val, '->', displayVal);
+                }
+                td.textContent = displayVal;
                 // Make Id fields clickable (Id, AccountId, OwnerId, etc.)
                 if (h.endsWith('Id') && val && val.length === 18) {
                     const objectType = getObjectTypeFromFieldName(h, rec);

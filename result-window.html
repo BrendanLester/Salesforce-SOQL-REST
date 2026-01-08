@@ -43,7 +43,11 @@ pre:focus { outline:none; }
 <div class="container">
     <div class="header">
         <h1>REST API Result</h1>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:8px; align-items:center;">
+            <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;" title="Convert UTC datetime to local timezone">
+                <input type="checkbox" id="convertUtcCheckbox" onchange="toggleUtcConversion()" style="cursor:pointer;">
+                <span>Local Time</span>
+            </label>
             <button id="copyBtn" class="action-btn" style="display:none;">📋 Copy</button>
             <button id="exportBtn" class="action-btn" style="display:none;">📄 Export JSON</button>
             <button id="openInSF" class="action-btn sf-link" style="display:none;">Open in Salesforce</button>
@@ -61,6 +65,158 @@ pre:focus { outline:none; }
 
 <script>
 const { ipcRenderer } = require('electron');
+
+// UTC to Local conversion state
+let convertUtcToLocal = false;
+let originalResultData = null;
+
+// Detect if a string is an ISO 8601 UTC datetime
+function isUtcDateTime(value) {
+    if (typeof value !== 'string') return false;
+    // Match ISO 8601 formats (Salesforce uses these):
+    const isoDateRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?(Z|[+-]\d{4}|[+-]00:00)$/;
+    return isoDateRegex.test(value);
+}
+
+// Convert UTC datetime string to local datetime string
+function convertToLocalDateTime(utcString) {
+    try {
+        const date = new Date(utcString);
+        if (isNaN(date.getTime())) return utcString;
+        
+        // Format: 2026-01-06T19:37:22.000+0000 (same format, local time and timezone)
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+        
+        // Get timezone offset in format +0000 or -0500
+        const offset = -date.getTimezoneOffset();
+        const offsetHours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+        const offsetMinutes = String(Math.abs(offset) % 60).padStart(2, '0');
+        const offsetSign = offset >= 0 ? '+' : '-';
+        const timezoneStr = `${offsetSign}${offsetHours}${offsetMinutes}`;
+        
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${timezoneStr}`;
+    } catch {
+        return utcString;
+    }
+}
+
+// Recursively convert datetime values in an object or array
+function convertDatetimesInObject(obj) {
+    if (obj === null || obj === undefined) return obj;
+    
+    if (Array.isArray(obj)) {
+        return obj.map(item => convertDatetimesInObject(item));
+    }
+    
+    if (typeof obj === 'object') {
+        const newObj = {};
+        for (const key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                newObj[key] = convertDatetimesInObject(obj[key]);
+            }
+        }
+        return newObj;
+    }
+    
+    // If it's a string that looks like a datetime, convert it
+    if (typeof obj === 'string' && isUtcDateTime(obj)) {
+        return convertToLocalDateTime(obj);
+    }
+    
+    return obj;
+}
+
+// Toggle UTC to local datetime conversion
+function toggleUtcConversion() {
+    const checkbox = document.getElementById('convertUtcCheckbox');
+    convertUtcToLocal = checkbox.checked;
+    
+    if (originalResultData) {
+        renderResult(originalResultData, true); // Pass true to indicate toggle (preserve scroll)
+    }
+}
+
+// Render result with conversion applied
+function renderResult(resultData, isToggle = false) {
+    const contentDiv = document.getElementById('content');
+    const copyBtn = document.getElementById('copyBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    
+    // Save current scroll position if toggling
+    const savedScrollTop = isToggle ? contentDiv.scrollTop : 0;
+    
+    const pre = document.createElement('pre');
+    const displayData = convertUtcToLocal ? convertDatetimesInObject(resultData) : resultData;
+    const jsonText = JSON.stringify(displayData, null, 2);
+    pre.textContent = jsonText;
+    pre.tabIndex = 0;
+    contentDiv.innerHTML = '';
+    contentDiv.appendChild(pre);
+    
+    // Handle Ctrl+A to select only JSON text
+    pre.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+            e.preventDefault();
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(pre);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+    });
+    
+    setTimeout(() => {
+        pre.focus();
+        if (isToggle) {
+            // Restore scroll position when toggling
+            contentDiv.scrollTop = savedScrollTop;
+        } else {
+            // Scroll to top on initial render
+            pre.scrollTop = 0;
+            contentDiv.scrollTop = 0;
+        }
+    }, 100);
+    
+    // Update copy button to use current display data
+    copyBtn.onclick = async () => {
+        try {
+            await navigator.clipboard.writeText(jsonText);
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = '✓ Copied!';
+            setTimeout(() => {
+                copyBtn.textContent = originalText;
+            }, 2000);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+            alert('Failed to copy to clipboard');
+        }
+    };
+    
+    // Update export button to use current display data
+    exportBtn.onclick = () => {
+        const blob = new Blob([jsonText], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const now = new Date();
+        const timestamp = now.getFullYear() + '-' + 
+            String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+            String(now.getDate()).padStart(2, '0') + 'T' + 
+            String(now.getHours()).padStart(2, '0') + '-' + 
+            String(now.getMinutes()).padStart(2, '0') + '-' + 
+            String(now.getSeconds()).padStart(2, '0');
+        const recordId = resultData.Id || 'record';
+        a.download = `${recordId}_${timestamp}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+}
 
 // Search functionality
 let currentMatches = [];
@@ -270,11 +426,25 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Request the result data from main process
-ipcRenderer.invoke('get-result-data').then(resultData => {
+ipcRenderer.invoke('get-result-data').then(resultWrapper => {
     const contentDiv = document.getElementById('content');
     const openInSFBtn = document.getElementById('openInSF');
     const copyBtn = document.getElementById('copyBtn');
     const exportBtn = document.getElementById('exportBtn');
+    const checkbox = document.getElementById('convertUtcCheckbox');
+    
+    if (!resultWrapper) {
+        contentDiv.innerHTML = '<div class="error">No data available</div>';
+        return;
+    }
+    
+    // Extract data and conversion state
+    const resultData = resultWrapper.data || resultWrapper;
+    const inheritedConversion = resultWrapper.convertUtcToLocal || false;
+    
+    // Set checkbox state to match main window
+    convertUtcToLocal = inheritedConversion;
+    checkbox.checked = convertUtcToLocal;
     
     if (!resultData) {
         contentDiv.innerHTML = '<div class="error">No data available</div>';
@@ -284,78 +454,21 @@ ipcRenderer.invoke('get-result-data').then(resultData => {
     if (resultData.error) {
         contentDiv.innerHTML = `<div class="error">${resultData.error}</div>`;
     } else {
-        const pre = document.createElement('pre');
-        const jsonText = JSON.stringify(resultData, null, 2);
-        pre.textContent = jsonText;
-        pre.tabIndex = 0; // Make focusable
-        contentDiv.innerHTML = '';
-        contentDiv.appendChild(pre);
+        // Store original data
+        originalResultData = resultData;
         
-        // Handle Ctrl+A to select only JSON text
-        pre.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-                e.preventDefault();
-                const selection = window.getSelection();
-                const range = document.createRange();
-                range.selectNodeContents(pre);
-                selection.removeAllRanges();
-                selection.addRange(range);
-            }
-        });
+        // Render with current conversion setting
+        renderResult(resultData);
         
-        // Auto-focus the pre element and ensure scroll is at top
-        setTimeout(() => {
-            pre.focus();
-            pre.scrollTop = 0;
-            // Scroll the content div to top
-            const content = document.getElementById('content');
-            if (content) {
-                content.scrollTop = 0;
-            }
-        }, 100);
-        
-        // Show copy button
+        // Show buttons
         copyBtn.style.display = 'block';
-        copyBtn.addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(jsonText);
-                const originalText = copyBtn.textContent;
-                copyBtn.textContent = '✓ Copied!';
-                setTimeout(() => {
-                    copyBtn.textContent = originalText;
-                }, 2000);
-            } catch (err) {
-                console.error('Failed to copy:', err);
-                alert('Failed to copy to clipboard');
-            }
-        });
-        
-        // Show export button
         exportBtn.style.display = 'block';
-        exportBtn.addEventListener('click', () => {
-            const blob = new Blob([jsonText], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            const now = new Date();
-            const timestamp = now.getFullYear() + '-' + 
-                String(now.getMonth() + 1).padStart(2, '0') + '-' + 
-                String(now.getDate()).padStart(2, '0') + 'T' + 
-                String(now.getHours()).padStart(2, '0') + '-' + 
-                String(now.getMinutes()).padStart(2, '0') + '-' + 
-                String(now.getSeconds()).padStart(2, '0');
-            const recordId = resultData.Id || 'record';
-            a.download = `${recordId}_${timestamp}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-        });
         
         // Update title with object type if available
         if (resultData.attributes && resultData.attributes.type) {
             const titleText = `${resultData.attributes.type} - ${resultData.Id || 'Record'}`;
             document.title = titleText;
             document.querySelector('h1').textContent = `${resultData.attributes.type} Record`;
-            // Update title bar text
             const titleBarDragRegion = document.querySelector('.title-bar-drag-region');
             if (titleBarDragRegion) {
                 titleBarDragRegion.textContent = titleText;
