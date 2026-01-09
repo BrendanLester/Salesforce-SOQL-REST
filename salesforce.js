@@ -276,8 +276,61 @@ async function withTokenRetry(requestFn) {
     }
 }
 
+// Extract object name from a SOQL query
+function extractObjectName(query) {
+    // Match FROM <ObjectName> - handle case insensitive and various spacing
+    const fromMatch = query.match(/\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    return fromMatch ? fromMatch[1] : null;
+}
+
+// Expand SELECT * to actual field names
+async function expandSelectStar(query) {
+    // Check if query contains SELECT *
+    const selectStarPattern = /\bSELECT\s+\*/i;
+    if (!selectStarPattern.test(query)) {
+        // No SELECT * found, return original query
+        return query;
+    }
+
+    console.log('Detected SELECT * - expanding to all field names...');
+    
+    // Extract the object name
+    const objectName = extractObjectName(query);
+    if (!objectName) {
+        console.error('Could not extract object name from query');
+        return query;
+    }
+
+    try {
+        // Get the object metadata
+        const metadata = await describeObject(objectName);
+        
+        // Get all field names
+        const fieldNames = metadata.fields.map(field => field.name);
+        
+        if (fieldNames.length === 0) {
+            console.warn('No fields found for object:', objectName);
+            return query;
+        }
+
+        // Replace SELECT * with field names
+        const expandedQuery = query.replace(selectStarPattern, `SELECT ${fieldNames.join(', ')}`);
+        console.log(`Expanded SELECT * to ${fieldNames.length} fields for ${objectName}`);
+        
+        return expandedQuery;
+    } catch (error) {
+        console.error('Error expanding SELECT *:', error);
+        // Return original query if expansion fails
+        return query;
+    }
+}
+
 async function executeSOQL(query, onProgress = null, abortSignal = null) {
     console.log('executeSOQL called with:', query);
+    
+    // Expand SELECT * if present
+    query = await expandSelectStar(query);
+    
     const config = loadConfig();
     const apiVersion = config.apiVersion;
 
