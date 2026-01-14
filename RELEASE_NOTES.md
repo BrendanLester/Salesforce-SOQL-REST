@@ -1,6 +1,8 @@
+
 ## v0.2.1
 - Toggle to convert UTC datetimes to local timezone
 - Support 'select *' syntax by automatically adding all fields to the query (note Salesforce does have some limits and queries will be slower)
+- Release notes and New Version Available check
 
 
 ## v0.2.0
