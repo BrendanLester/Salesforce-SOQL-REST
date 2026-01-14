@@ -2164,13 +2164,27 @@ window.getAutocompleteContext = function(text, cursorPos) {
     // Determine which SOQL clause we're in and whether to suggest fields
     
     if (objectName) {
-        const selectMatch = textBeforeCursorUpper.match(/\bSELECT\b(.*)$/);
-        const whereMatch = textBeforeCursorUpper.match(/\bWHERE\b(.*)$/);
-        const orderByMatch = textBeforeCursorUpper.match(/\bORDER\s+BY\b(.*)$/);
-        const groupByMatch = textBeforeCursorUpper.match(/\bGROUP\s+BY\b(.*)$/);
+        const selectMatch = textBeforeCursorUpper.match(/\bSELECT\b([\s\S]*)$/);
+        const whereMatch = textBeforeCursorUpper.match(/\bWHERE\b([\s\S]*)$/);
+        const orderByMatch = textBeforeCursorUpper.match(/\bORDER\s+BY\b([\s\S]*)$/);
+        const groupByMatch = textBeforeCursorUpper.match(/\bGROUP\s+BY\b([\s\S]*)$/);
         
         // SELECT clause - suggest fields before FROM or if FROM is ahead
         if (selectMatch && (!selectMatch[1].includes('FROM') || fromMatchAhead)) {
+            const textAfterSelect = selectMatch[1];
+            const textBeforeWord = textAfterSelect.substring(0, textAfterSelect.length - currentWord.length);
+            
+            // After a field name with space (waiting for comma or FROM) - suppress
+            if (currentWord === '' && textBeforeWord.match(/\w\s+$/)) {
+                return null;
+            }
+            
+            // If typing a new word without a preceding comma, suppress
+            // Only show if right after SELECT or after a comma
+            if (currentWord !== '' && !textBeforeWord.match(/(?:^\s*|,\s*)$/)) {
+                return null;
+            }
+            
             return { type: 'field', objectName: objectName, prefix: currentWord };
         }
         
@@ -2204,6 +2218,12 @@ window.getAutocompleteContext = function(text, cursorPos) {
             
             // After closing quote - suppress until AND/OR typed
             if (textBeforeWord.match(/['"]\s*$/) && currentWord === '') {
+                return null;
+            }
+            
+            // After a field name with space (waiting for operator) - suppress
+            // But NOT after logical keywords (AND/OR/NOT) where we want to show fields
+            if (currentWord === '' && textBeforeWord.match(/\w\s+$/) && !textBeforeWord.match(/\b(AND|OR|NOT)\s+$/i)) {
                 return null;
             }
             
