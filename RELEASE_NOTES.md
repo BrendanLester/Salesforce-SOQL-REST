@@ -1,4 +1,12 @@
 
+## v0.2.2
+### January, 2026
+- Add support for Create, Update & Delete. See Help, for REST syntax.
+- Add 'F5' as an alternate keypress to execute 
+- Add free license requirement for advanced features e.g. Create, Update & Delete. 
+Visit https://getplayforce.com to get a free license and paste it into your .env file
+
+
 ## v0.2.1
 ### January, 2026
 - Toggle to convert UTC datetimes to local timezone

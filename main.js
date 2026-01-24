@@ -300,9 +300,9 @@ ipcMain.handle('abort-query', async (event, queryId) => {
 });
 
 // Handle REST execution
-ipcMain.handle('execute-rest', async (event, path) => {
+ipcMain.handle('execute-rest', async (event, path, method = 'GET', body = null, headers = null) => {
     try {
-        return await salesforce.executeREST(path);
+        return await salesforce.executeREST(path, method, body, headers);
     } catch (error) {
         console.error('Error executing REST:', error);
         throw error;
@@ -326,6 +326,16 @@ ipcMain.handle('describe-object', async (event, objectName) => {
     } catch (error) {
         console.error('Error describing object:', error);
         throw error;
+    }
+});
+
+// Handle license info request
+ipcMain.handle('get-license-info', async (event) => {
+    try {
+        return salesforce.getLicenseInfo();
+    } catch (error) {
+        console.error('Error getting license info:', error);
+        return { licensed: false, message: 'Error checking license' };
     }
 });
 

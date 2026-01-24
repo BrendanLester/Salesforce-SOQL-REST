@@ -434,9 +434,129 @@ async function executeSOQL(query, onProgress = null, abortSignal = null) {
     });
 }
 
-async function executeREST(path) {
+function checkLicense() {
+    // Load license from .env file in root directory
+    let licenseKey = null;
+    const envPath = path.join(__dirname, '.env');
+    
+    if (fs.existsSync(envPath)) {
+        try {
+            const envContent = fs.readFileSync(envPath, 'utf8');
+            const match = envContent.match(/^PLAYFORCE_LICENSE=(.*)$/m);
+            if (match) {
+                licenseKey = match[1].trim().replace(/^['"]|['"]$/g, ''); // Remove quotes if present
+            }
+        } catch (e) {
+            console.error('Error reading .env file:', e);
+        }
+    }
+    
+    if (!licenseKey) {
+        return { licensed: false, message: 'No license key configured' };
+    }
+    
+    try {
+        const crypto = require('crypto');
+        
+        // Your public key (hardcoded - safe to expose)
+        const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn2cQarzuH9IGlOkhYnza
+hueM6jhtP0mSZNQTORzp3ZcBs1Q5NqeG2SHNuCoVBlrI5iQaS9aIWAve8gOQC2DA
+1WXq+WmHsjzChrHFKz3FLRgIljSg49DZ68kUmjbkvVFJolXZGyvKmXbq7ExJr1FJ
+szjMCzMNvf/hG4zMmV3Pa4E2ldavejTFVuACzsy0ToH4SofnVYo5X8YIC9xhdvIT
+n3dZydOs43PQb/yB3thIfDMd0lrV9xInH+by465gWMHZQLCqDtg+wLxglb5dz3mV
+YLL4vX5BZrFtcjaadLaRTeD/+HZBsK/6KCjZU0DGipFjrccXylif2FxLT9lZZf7o
+CQIDAQAB
+-----END PUBLIC KEY-----`;
+        
+        // License format: base64 encoded JSON with { data: {...}, signature: Buffer }
+        let licenseJson;
+        try {
+            const decoded = Buffer.from(licenseKey, 'base64').toString('utf8');
+            licenseJson = JSON.parse(decoded);
+        } catch (e) {
+            return { licensed: false, message: 'Invalid license format. Unable to decode license.' };
+        }
+        
+        if (!licenseJson.data || !licenseJson.signature) {
+            return { licensed: false, message: 'Invalid license structure. Missing data or signature.' };
+        }
+        
+        const licenseInfo = licenseJson.data;
+        const signatureData = licenseJson.signature;
+        
+        // Convert signature from Buffer format to actual Buffer
+        let signatureBuffer;
+        if (signatureData.type === 'Buffer' && Array.isArray(signatureData.data)) {
+            signatureBuffer = Buffer.from(signatureData.data);
+        } else {
+            return { licensed: false, message: 'Invalid signature format in license.' };
+        }
+        
+        // Verify signature - sign the JSON string of the data
+        const dataString = JSON.stringify(licenseInfo);
+        const isValid = crypto.verify(
+            'sha256', 
+            Buffer.from(dataString), 
+            {
+                key: PUBLIC_KEY,
+                padding: crypto.constants.RSA_PKCS1_PADDING
+            }, 
+            signatureBuffer
+        );
+        
+        if (!isValid) {
+            return { licensed: false, message: 'Invalid license signature.' };
+        }
+        
+        // Validate license info structure
+        if (!licenseInfo.organization || !licenseInfo.licenseeEmail) {
+            return { licensed: false, message: 'Invalid license data.' };
+        }
+        
+        // Check if license is active
+        const now = new Date();
+        const startDate = new Date(licenseInfo.startDateUTC);
+        const paidEndDate = new Date(licenseInfo.paidEndDateUTC);
+        const freeEndDate = new Date(licenseInfo.freeEndDateUTC);
+        
+        if (now < startDate) {
+            return { licensed: false, message: 'License not yet active' };
+        }
+        
+        const isPaidActive = paidEndDate && now <= paidEndDate;
+        const isFreeActive = freeEndDate && now <= freeEndDate;
+        
+        if (!isPaidActive && !isFreeActive) {
+            return { licensed: false, message: 'License expired.' };
+        }
+        
+        return { 
+            licensed: true, 
+            organization: licenseInfo.organization,
+            email: licenseInfo.licenseeEmail,
+            tier: licenseInfo.tier,
+            freeEndDateUTC: licenseInfo.freeEndDateUTC,
+            isPaid: isPaidActive
+        };
+        
+    } catch (e) {
+        console.error('License validation error:', e);
+        return { licensed: false, message: `Validation error: ${e.message}.` };
+    }
+}
+
+async function executeREST(path, method = 'GET', body = null, headers = null) {
     const config = loadConfig();
     const apiVersion = config.apiVersion;
+    
+    // Check license for write operations - now enforced
+    if (method !== 'GET') {
+        const licenseStatus = checkLicense();
+        if (!licenseStatus.licensed) {
+            throw new Error(`License required for write operations. ${licenseStatus.message} Visit https://getplayforce.com to get a license and paste it into your .env file.`);
+        }
+    }
 
     return await withTokenRetry(async (token, instanceUrl) => {
         if (!token || !instanceUrl) {
@@ -444,21 +564,42 @@ async function executeREST(path) {
         }
 
         const url = `${instanceUrl}/services/data/${apiVersion}/sobjects/${path}`;
-        console.log("Making REST request to:", url);
+        console.log(`Making ${method} REST request to:`, url);
+        if (headers) {
+            console.log('Custom headers:', JSON.stringify(headers));
+        }
+        if (body) {
+            console.log('Request body:', JSON.stringify(body));
+        }
 
-        const res = await fetch(url, {
+        const fetchOptions = {
+            method: method,
             headers: {
                 "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                ...(headers || {}) // Merge custom headers
             }
-        });
+        };
+
+        if (body && (method === 'POST' || method === 'PATCH' || method === 'PUT')) {
+            fetchOptions.body = JSON.stringify(body);
+        }
+
+        const res = await fetch(url, fetchOptions);
 
         if (!res.ok) {
             const text = await res.text();
             throw new Error(`REST API error: ${text}\nURL: ${url}`);
         }
 
-        return await res.json();
+        // For DELETE or some operations, response might be empty
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            return await res.json();
+        } else {
+            // For 204 No Content or other non-JSON responses
+            return { success: true, status: res.status };
+        }
     });
 }
 
@@ -582,6 +723,10 @@ async function describeObject(objectName) {
     });
 }
 
+function getLicenseInfo() {
+    return checkLicense();
+}
+
 module.exports = {
     executeSOQL,
     executeREST,
@@ -595,7 +740,8 @@ module.exports = {
     tryAuthenticate,
     hasValidToken,
     describeGlobal,
-    describeObject
+    describeObject,
+    getLicenseInfo
 };
 
 console.log('salesforce.js loaded successfully');

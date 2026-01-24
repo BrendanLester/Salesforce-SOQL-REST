@@ -77,9 +77,8 @@ OAuth 2.0 is the recommended method for interactive use. It provides secure auth
      - `http://localhost:8892/oauth/callback`
    - **Why multiple ports?** Playforce Query automatically tries ports 8888-8892 to avoid conflicts with other applications
    - **Selected OAuth Scopes**: Add at least:
-     - `Full access (full)`
+     - `Manage user data via APIS (api)`
      - `Perform requests at any time (refresh_token, offline_access)`
-     - Or select specific scopes as needed (e.g., `api`, `refresh_token`)
    - Unselect check boxes in **Flow Enablement** and **Security**   
    - Select **Enable Authorization Code and Credentials Flow**
      - Alternative is to Select **Enable Client Credentials Flow** for Client Credentials flow that would also need a 'Run As' user specified
@@ -105,6 +104,11 @@ Create a JSON file in this directory:
 **That's it!** The system will automatically:
 1. Try client credentials authentication
 2. Switch to OAuth if client credentials are not available
+
+
+### Optional Step 3: Restrict or Grant access for Create, Update & Delete
+Playforce Query can facilitate CUD operations. If you need to grant or deny for those activities, consult your best practice setup for your site. This could involve use of Permission sets or other arrangements allocated to the External Client App and your users.
+
 
 ## Configuration Examples
 

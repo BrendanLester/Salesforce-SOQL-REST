@@ -10,7 +10,7 @@ try {
 
     window.api = {
         executeSOQL: (query, queryId) => ipcRenderer.invoke('execute-soql', query, queryId),
-        executeREST: (path) => ipcRenderer.invoke('execute-rest', path),
+        executeREST: (path, method = 'GET', body = null, headers = null) => ipcRenderer.invoke('execute-rest', path, method, body, headers),
         abortQuery: (queryId) => ipcRenderer.invoke('abort-query', queryId),
         setConfigFile: (configName) => ipcRenderer.invoke('set-config-file', configName),
         listConfigs: () => ipcRenderer.invoke('list-configs'),
@@ -25,6 +25,7 @@ try {
         onSOQLProgress: (callback) => ipcRenderer.on('soql-progress', (event, progress) => callback(progress)),
         describeGlobal: () => ipcRenderer.invoke('describe-global'),
         describeObject: (objectName) => ipcRenderer.invoke('describe-object', objectName),
+        getLicenseInfo: () => ipcRenderer.invoke('get-license-info'),
         openExternal: (url) => ipcRenderer.invoke('open-external', url),
         openResultWindow: (data) => ipcRenderer.invoke('open-result-window', data),
         closeAllPopups: () => ipcRenderer.invoke('close-all-popups')
@@ -100,7 +101,7 @@ tr:hover { background:#fffae6; }
 
 
 #helpModal { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:10000; display:none; align-items:center; justify-content:center; }
-#helpContent { background:#fff; border-radius:8px; padding:20px; max-width:400px; box-shadow:0 4px 16px rgba(0,0,0,0.3); }
+#helpContent { background:#fff; border-radius:8px; padding:20px; max-width:600px; box-shadow:0 4px 16px rgba(0,0,0,0.3); }
 #helpContent h3 { margin:0 0 15px 0; color:#333; border-bottom:2px solid #0066cc; padding-bottom:8px; }
 #helpContent table { width:100%; border-collapse:collapse; font-family:monospace; font-size:13px; }
 #helpContent td { padding:6px 8px; border-bottom:1px solid #eee; }
@@ -121,7 +122,7 @@ tr:hover { background:#fffae6; }
     </select>
     
     <div style="margin-left:auto; font-size:12px; color:#666; display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
-        <span>Press Ctrl+E on a query block to execute SOQL or REST</span>
+        <span>Press Ctrl+E or F5 on a query block to execute SOQL or REST</span>
         <div style="display:flex; gap:8px; align-items:center;">
             <span id="updateAvailable" style="display:none; color:#0066cc; cursor:pointer; font-size:11px; font-weight:bold;" onclick="showUpdateNotification()" title="New version available!">🔔 New Version Available</span>
             <span id="versionInfo" style="font-size:11px; color:#999;"></span>
@@ -133,9 +134,10 @@ tr:hover { background:#fffae6; }
 
 <div id="helpModal" onclick="if(event.target===this) toggleHelp()">
     <div id="helpContent">
-        <h3>⌨️ Keyboard Shortcuts</h3>
+        <h3>⌨️ Keyboard Shortcuts & Help </h3>
+
         <table>
-            <tr><td>Ctrl+E</td><td>Execute query block</td></tr>
+            <tr><td>Ctrl+E or F5</td><td>Execute query block</td></tr>
             <tr><td>Ctrl+F</td><td>Find in editor/results</td></tr>
             <tr><td>Ctrl+A</td><td>Select all (in results)</td></tr>
             <tr><td>Tab / Enter</td><td>Select autocomplete item</td></tr>
@@ -145,10 +147,20 @@ tr:hover { background:#fffae6; }
             <tr><td>PgUp / PgDn</td><td>Jump 5 items</td></tr>
             <tr><td>Escape</td><td>Close popup/search</td></tr>
         </table>
-        <div style="margin-top:12px; padding:8px; background:#f8f9fa; border-radius:4px; font-size:11px; color:#555;">
-            <strong>REST Syntax:</strong> Type <code style="background:#e9ecef; padding:2px 4px; border-radius:2px;">ObjectName/Id</code><br>
-            Example: <code style="background:#e9ecef; padding:2px 4px; border-radius:2px;">Account/001xx000003DGb0AAG</code>
+        <div style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:4px; font-size:12px; color:#555; line-height:1.5;">
+            <strong>REST Syntax:</strong><br>
+            <code style="background:#e9ecef; padding:3px 5px; border-radius:3px;">Account/001xx</code> → GET (read)<br>
+            <code style="background:#e9ecef; padding:3px 5px; border-radius:3px;">Account { "Name": "New" }</code> → POST (create)<br>
+            <code style="background:#e9ecef; padding:3px 5px; border-radius:3px;">Account/001xx { "Name": "Changed" }</code> → PATCH (update)<br>
+            <code style="background:#e9ecef; padding:3px 5px; border-radius:3px;">Account {"header": "val"} {"Name": "New"}</code> → POST with headers<br>
+            <code style="background:#e9ecef; padding:3px 5px; border-radius:3px;">DELETE Account/001xx</code> → DELETE 
         </div>
+
+        <div id="licenseInfo" style="margin-bottom:15px; padding:10px; background:#e8f5e9; border-left:4px solid #4caf50; border-radius:4px; font-size:12px; display:none;">
+            <div style="font-weight:bold; color:#2e7d32; margin-bottom:4px;">✓ Licensed</div>
+            <div style="color:#555;" id="licenseDetails"></div>
+        </div>
+
         <div style="margin-top:15px; padding-top:10px; border-top:1px solid #eee; font-size:12px; color:#666; text-align:center;">
             Learn more at <a href="#" onclick="event.preventDefault(); window.api.openExternal('https://getplayforce.com/')" style="color:#0066cc;">getplayforce.com</a>
         </div>
@@ -183,7 +195,7 @@ tr:hover { background:#fffae6; }
         <button id="exportCsvBtn" onclick="exportToCSV()" tabindex="-1" style="display:none;">📊 Export CSV</button>
     </div>
     <div id="log" tabindex="0">
-        <div id="logContent">👉 Select an environment first, then press Ctrl+E on a block above to execute.</div>
+        <div id="logContent">👉 Select an environment first, then press Ctrl+E or F5 on a block above to execute.</div>
     </div>
     <div id="logSearch" class="search-box">
         <input type="text" placeholder="Search..." id="logSearchInput">
@@ -482,12 +494,37 @@ function filterNewerVersions(markdown, currentVersion) {
 }
 
 // Toggle help modal
-function toggleHelp() {
+async function toggleHelp() {
     const modal = document.getElementById('helpModal');
-    if (modal.style.display === 'flex') {
-        modal.style.display = 'none';
-    } else {
+    const isOpening = modal.style.display !== 'flex';
+    
+    if (isOpening) {
         modal.style.display = 'flex';
+        
+        // Load license info when opening
+        try {
+            const license = await window.api.getLicenseInfo();
+            const licenseInfoDiv = document.getElementById('licenseInfo');
+            const licenseDetails = document.getElementById('licenseDetails');
+            
+            if (license.licensed) {
+ 
+                licenseDetails.innerHTML = `
+                    Organization: <strong>${license.organization}</strong><br>
+                    Licensee: ${license.email}<br>
+                    Tier: ${license.tier}<br>
+                    Expires: ${license.freeEndDateUTC}
+                `;
+                licenseInfoDiv.style.display = 'block';
+            } else {
+                licenseInfoDiv.style.display = 'none';
+            }
+        } catch (e) {
+            console.error('Error loading license info:', e);
+            document.getElementById('licenseInfo').style.display = 'none';
+        }
+    } else {
+        modal.style.display = 'none';
     }
 }
 
@@ -1553,9 +1590,9 @@ if(window.api?.onSOQLProgress) {
     });
 }
 
-// Ctrl+E handler supporting multi-line SOQL separated by blank lines
+// Ctrl+E and F5 handler supporting multi-line SOQL separated by blank lines
 document.addEventListener("keydown",async e=>{
-    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='e'){
+    if(((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='e') || e.key === 'F5'){
         e.preventDefault(); if(!window.api){ alert("Error: API not loaded."); return; }
         if(!editorView) return;
 
@@ -1641,8 +1678,10 @@ document.addEventListener("keydown",async e=>{
         
         document.body.style.cursor = 'wait';
         try{
-            const soqlKeywords=/^(SELECT|UPDATE|DELETE|INSERT|UPSERT|MERGE)\b/i;
-            if(soqlKeywords.test(targetBlock)){
+            // SOQL only supports SELECT - everything else is REST
+            const isSOQL = /^SELECT\b/i.test(targetBlock);
+            
+            if(isSOQL){
                 // Remove // and -- comments from SOQL
                 const cleanedBlock = targetBlock.split('\n').map(l=>l.replace(/(\/\/|--).*/,'').trim()).join('\n').trim();
                 const result = await window.api.executeSOQL(cleanedBlock, currentQueryId);
@@ -1691,20 +1730,108 @@ document.addEventListener("keydown",async e=>{
                     renderResult(result);
                 }
             } else {
-                // Treat each non-empty line as a REST path
-                const lines = targetBlock.split("\n").map(l=>l.trim()).filter(l=>l);
-                for(const path of lines){
-                    try{
-                        // Remove // and -- comments from REST paths
-                        const cleanedPath = path.replace(/(\/\/|--).*/,'').trim();
-                        if(!cleanedPath) continue;
-                        const res = await window.api.executeREST(cleanedPath);
-                        renderResult(res);
-                    } catch(err){
-                        const errEl=document.createElement("div"); errEl.className="log-line";
-                        errEl.innerHTML=formatErrorMessage(err.message);
-                        logContent.appendChild(errEl);
+                // Parse REST requests - support formats like:
+                // Account/001xx (GET - read existing)
+                // Account/001xx { "Name": "New Name" } (PATCH - update existing)
+                // Account { "Name": "Test" } (POST - create new)
+                // DELETE Account/001xx (explicit DELETE)
+                // Can also explicitly specify: GET/POST/PATCH/PUT/DELETE
+                
+                try {
+                    // Remove // and -- comments from entire block first
+                    let cleanedBlock = targetBlock.split('\n')
+                        .map(l => l.replace(/(\/\/|--).*/,'').trim())
+                        .join('\n').trim();
+                    
+                    if (!cleanedBlock) {
+                        throw new Error('Empty REST request');
                     }
+                    
+                    // Check for explicit HTTP method at the start
+                    const methodMatch = cleanedBlock.match(/^(GET|POST|PATCH|PUT|DELETE)\s+/i);
+                    let method = null; // Will be inferred if not specified
+                    let restContent = cleanedBlock;
+                    
+                    if (methodMatch) {
+                        method = methodMatch[1].toUpperCase();
+                        restContent = cleanedBlock.substring(methodMatch[0].length).trim();
+                    }
+                    
+                    // Parse path and JSON objects
+                    // Support: Account {body} or Account {headers} {body}
+                    let path = restContent;
+                    let headers = null;
+                    let body = null;
+                    
+                    const firstBraceIndex = restContent.indexOf('{');
+                    if (firstBraceIndex !== -1) {
+                        path = restContent.substring(0, firstBraceIndex).trim();
+                        
+                        // Extract all JSON objects from the rest of the content
+                        const afterPath = restContent.substring(firstBraceIndex);
+                        const jsonObjects = [];
+                        let currentPos = 0;
+                        
+                        while (currentPos < afterPath.length) {
+                            const nextBrace = afterPath.indexOf('{', currentPos);
+                            if (nextBrace === -1) break;
+                            
+                            // Find matching closing brace
+                            let braceCount = 0;
+                            let endPos = nextBrace;
+                            for (let i = nextBrace; i < afterPath.length; i++) {
+                                if (afterPath[i] === '{') braceCount++;
+                                if (afterPath[i] === '}') braceCount--;
+                                if (braceCount === 0) {
+                                    endPos = i + 1;
+                                    break;
+                                }
+                            }
+                            
+                            const jsonString = afterPath.substring(nextBrace, endPos).trim();
+                            try {
+                                jsonObjects.push(JSON.parse(jsonString));
+                            } catch (parseErr) {
+                                throw new Error(`Invalid JSON object: ${parseErr.message}`);
+                            }
+                            
+                            currentPos = endPos;
+                        }
+                        
+                        // Assign objects based on count
+                        if (jsonObjects.length === 1) {
+                            body = jsonObjects[0];
+                        } else if (jsonObjects.length === 2) {
+                            headers = jsonObjects[0];
+                            body = jsonObjects[1];
+                        } else if (jsonObjects.length > 2) {
+                            throw new Error('Too many JSON objects. Expected 1 (body) or 2 (headers, body)');
+                        }
+                    }
+                    
+                    if (!path) {
+                        throw new Error('No path specified in REST request');
+                    }
+                    
+                    // Smart method inference if not explicitly specified
+                    if (!method) {
+                        const hasId = path.includes('/');
+                        if (body) {
+                            // Has body: POST (create) or PATCH (update)
+                            method = hasId ? 'PATCH' : 'POST';
+                        } else {
+                            // No body: defaults to GET
+                            method = 'GET';
+                        }
+                    }
+                    
+                    const res = await window.api.executeREST(path, method, body, headers);
+                    renderResult(res);
+                    
+                } catch(err) {
+                    const errEl=document.createElement("div"); errEl.className="log-line";
+                    errEl.innerHTML=formatErrorMessage(err.message);
+                    logContent.appendChild(errEl);
                 }
             }
         } catch(err){
